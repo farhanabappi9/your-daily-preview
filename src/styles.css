@@ -220,8 +220,16 @@
     transition: transform 700ms ease;
     pointer-events: none;
   }
+  /* Idle: a soft side-to-side nudge every few seconds so the button catches
+     the eye without becoming annoying. `will-change` keeps it on the GPU. */
+  .btn-order {
+    animation: btn-order-nudge 6s ease-in-out 2s infinite;
+    will-change: transform;
+  }
   .btn-order:hover {
-    transform: translateY(-2px) scale(1.02);
+    /* Hover takes over with a livelier hop; the idle nudge is paused so the
+       two animations never fight over `transform`. */
+    animation: btn-order-jump 620ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
     border-color: color-mix(in oklab, oklch(0.82 0.15 85) 75%, transparent);
     box-shadow:
       0 12px 26px -10px color-mix(in oklab, oklch(0.34 0.12 16) 85%, transparent),
@@ -231,7 +239,70 @@
     transform: translateX(120%);
   }
   .btn-order:active {
-    transform: translateY(0) scale(0.985);
+    animation: btn-order-press 220ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+  .btn-order:focus-visible {
+    outline: none;
+    animation: btn-order-jump 620ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    box-shadow:
+      0 12px 26px -10px color-mix(in oklab, oklch(0.34 0.12 16) 85%, transparent),
+      0 0 0 3px color-mix(in oklab, oklch(0.82 0.15 85) 55%, transparent);
+  }
+
+  /* Hover: hop up, drift left, hop again to the right, settle. */
+  @keyframes btn-order-jump {
+    0% {
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+    22% {
+      transform: translate3d(-5px, -7px, 0) scale(1.04) rotate(-1.4deg);
+    }
+    46% {
+      transform: translate3d(4px, 0, 0) scale(1.01) rotate(0.8deg);
+    }
+    68% {
+      transform: translate3d(5px, -4px, 0) scale(1.03) rotate(1.2deg);
+    }
+    86% {
+      transform: translate3d(-2px, 0, 0) scale(1.01) rotate(-0.4deg);
+    }
+    100% {
+      transform: translate3d(0, -2px, 0) scale(1.02);
+    }
+  }
+
+  /* Click: squash down, then pop back — reads as a physical press. */
+  @keyframes btn-order-press {
+    0% {
+      transform: translate3d(0, -2px, 0) scale(1.02);
+    }
+    45% {
+      transform: translate3d(0, 2px, 0) scale(0.94);
+    }
+    100% {
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+  }
+
+  /* Idle: most of the cycle is stillness; the wiggle only occupies the tail. */
+  @keyframes btn-order-nudge {
+    0%,
+    82%,
+    100% {
+      transform: translate3d(0, 0, 0);
+    }
+    86% {
+      transform: translate3d(-4px, -3px, 0) rotate(-1deg);
+    }
+    90% {
+      transform: translate3d(4px, -1px, 0) rotate(1deg);
+    }
+    94% {
+      transform: translate3d(-2px, -2px, 0) rotate(-0.5deg);
+    }
+    97% {
+      transform: translate3d(1px, 0, 0);
+    }
   }
   .btn-order-label {
     position: relative;
@@ -256,14 +327,18 @@
       background-position: -220% 0;
     }
   }
+  /* Anyone who has asked their device to reduce motion gets a plain button:
+     no hop, no nudge, no shimmer. Motion-sensitive users can feel unwell from
+     repeating movement, and this is the one control they have. */
   @media (prefers-reduced-motion: reduce) {
     .btn-order,
     .btn-order::after,
-    .btn-order-label {
+    .btn-order-label,
+    .btn-order:hover,
+    .btn-order:active,
+    .btn-order:focus-visible {
       animation: none;
       transition: none;
-    }
-    .btn-order:hover {
       transform: none;
     }
   }
