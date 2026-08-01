@@ -99,13 +99,16 @@ const sizeSuffix = (sizes?: Record<string, string>) =>
     .map(([k, v]) => `${SIZE_LABEL[k] ?? k}: ${v}`)
     .join(", ");
 
+/** Maximum lengths — keep these in sync with the `maxLength` props in checkout.tsx. */
+export const ORDER_LIMITS = { name: 100, phone: 20, address: 500, note: 500, coupon: 40 } as const;
+
 const orderInput = z.object({
-  name: z.string().trim().min(2).max(100),
-  phone: z.string().trim().min(6).max(20),
-  address: z.string().trim().min(5).max(500),
-  note: z.string().trim().max(500).optional().default(""),
+  name: z.string().trim().min(2).max(ORDER_LIMITS.name),
+  phone: z.string().trim().min(6).max(ORDER_LIMITS.phone),
+  address: z.string().trim().min(5).max(ORDER_LIMITS.address),
+  note: z.string().trim().max(ORDER_LIMITS.note).optional().default(""),
   area: z.enum(["inside", "outside"]),
-  couponCode: z.string().trim().max(40).optional().default(""),
+  couponCode: z.string().trim().max(ORDER_LIMITS.coupon).optional().default(""),
   items: z
     .array(
       z.object({
@@ -118,8 +121,52 @@ const orderInput = z.object({
     .max(50),
 });
 
+const FIELD_LABEL: Record<string, string> = {
+  name: "নাম",
+  phone: "মোবাইল নম্বর",
+  address: "ঠিকানা",
+  note: "নোট",
+  area: "ডেলিভারি এলাকা",
+  couponCode: "কুপন কোড",
+  items: "কার্ট",
+};
+
+/**
+ * Turns a Zod failure into a single sentence the customer can act on.
+ *
+ * Without this the raw issue array was serialised straight into the error
+ * message and rendered under the confirm button — the shopper saw JSON like
+ * `[{"code":"too_big","path":["name"]}]` and simply abandoned the order.
+ */
+function friendlyOrderError(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return "তথ্য সঠিকভাবে পূরণ করুন।";
+
+  const field = String(issue.path[0] ?? "");
+  const label = FIELD_LABEL[field] ?? field;
+
+  if (field === "items") return "কার্টে কোনো পণ্য নেই। আবার চেষ্টা করুন।";
+
+  switch (issue.code) {
+    case "too_big":
+      return `${label} সর্বোচ্চ ${(issue as { maximum?: number }).maximum} অক্ষরের হতে পারে। একটু ছোট করে লিখুন।`;
+    case "too_small":
+      return field === "phone"
+        ? "সঠিক মোবাইল নম্বর দিন (কমপক্ষে ৬ ডিজিট)।"
+        : `${label} আরও বিস্তারিত লিখুন (কমপক্ষে ${(issue as { minimum?: number }).minimum} অক্ষর)।`;
+    case "invalid_type":
+      return `${label} পূরণ করুন।`;
+    default:
+      return `${label} সঠিকভাবে পূরণ করুন।`;
+  }
+}
+
 export const placeOrder = createServerFn({ method: "POST" })
-  .inputValidator((d: z.input<typeof orderInput>) => orderInput.parse(d))
+  .inputValidator((d: z.input<typeof orderInput>) => {
+    const parsed = orderInput.safeParse(d);
+    if (!parsed.success) throw new Error(friendlyOrderError(parsed.error));
+    return parsed.data;
+  })
   .handler(async ({ data }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const db = supabaseAdmin as any;
@@ -135,7 +182,9 @@ export const placeOrder = createServerFn({ method: "POST" })
       throw new Error("পণ্য যাচাই করা যায়নি, একটু পরে আবার চেষ্টা করুন।");
     }
     const list = (products ?? []) as DbProduct[];
-    if (!list.length) throw new Error("No valid products in order");
+    if (!list.length) {
+      throw new Error("কার্টের পণ্যগুলো এখন আর পাওয়া যাচ্ছে না। পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।");
+    }
 
     const items = data.items
       .map((i) => {
@@ -221,7 +270,10 @@ export const placeOrder = createServerFn({ method: "POST" })
       })
       .select("id, order_no")
       .single();
-    if (error) throw new Error(error.message);
+    if (error) {
+      console.error("[order] insert failed:", error.message);
+      throw new Error("অর্ডার সংরক্ষণ করা যায়নি। একটু পরে আবার চেষ্টা করুন অথবা আমাদের কল করুন।");
+    }
 
     await db.from("order_items").insert(items.map((i) => ({ ...i, order_id: order.id })));
     await db
