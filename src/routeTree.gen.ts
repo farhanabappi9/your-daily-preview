@@ -18,6 +18,7 @@ import { Route as ContactRouteImport } from './routes/contact'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as ReturnPolicyRouteImport } from './routes/return-policy'
+import { Route as ShopRouteImport } from './routes/shop'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as ThankYouRouteImport } from './routes/thank-you'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
@@ -85,6 +86,11 @@ const PrivacyRoute = PrivacyRouteImport.update({
 const ReturnPolicyRoute = ReturnPolicyRouteImport.update({
   id: '/return-policy',
   path: '/return-policy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ShopRoute = ShopRouteImport.update({
+  id: '/shop',
+  path: '/shop',
   getParentRoute: () => rootRouteImport,
 } as any)
 const TermsRoute = TermsRouteImport.update({
@@ -213,6 +219,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/return-policy': typeof ReturnPolicyRoute
+  '/shop': typeof ShopRoute
   '/terms': typeof TermsRoute
   '/thank-you': typeof ThankYouRoute
   '/admin/banners': typeof AdminBannersRoute
@@ -246,6 +253,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/return-policy': typeof ReturnPolicyRoute
+  '/shop': typeof ShopRoute
   '/terms': typeof TermsRoute
   '/thank-you': typeof ThankYouRoute
   '/admin/banners': typeof AdminBannersRoute
@@ -281,6 +289,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/return-policy': typeof ReturnPolicyRoute
+  '/shop': typeof ShopRoute
   '/terms': typeof TermsRoute
   '/thank-you': typeof ThankYouRoute
   '/admin/banners': typeof AdminBannersRoute
@@ -317,6 +326,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/privacy'
     | '/return-policy'
+    | '/shop'
     | '/terms'
     | '/thank-you'
     | '/admin/banners'
@@ -350,6 +360,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/privacy'
     | '/return-policy'
+    | '/shop'
     | '/terms'
     | '/thank-you'
     | '/admin/banners'
@@ -384,6 +395,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/privacy'
     | '/return-policy'
+    | '/shop'
     | '/terms'
     | '/thank-you'
     | '/admin/banners'
@@ -419,6 +431,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   PrivacyRoute: typeof PrivacyRoute
   ReturnPolicyRoute: typeof ReturnPolicyRoute
+  ShopRoute: typeof ShopRoute
   TermsRoute: typeof TermsRoute
   ThankYouRoute: typeof ThankYouRoute
   ApiHealthRoute: typeof ApiHealthRoute
@@ -492,6 +505,13 @@ declare module '@tanstack/react-router' {
       path: '/return-policy'
       fullPath: '/return-policy'
       preLoaderRoute: typeof ReturnPolicyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/shop': {
+      id: '/shop'
+      path: '/shop'
+      fullPath: '/shop'
+      preLoaderRoute: typeof ShopRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/terms': {
@@ -706,6 +726,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   PrivacyRoute: PrivacyRoute,
   ReturnPolicyRoute: ReturnPolicyRoute,
+  ShopRoute: ShopRoute,
   TermsRoute: TermsRoute,
   ThankYouRoute: ThankYouRoute,
   ApiHealthRoute: ApiHealthRoute,

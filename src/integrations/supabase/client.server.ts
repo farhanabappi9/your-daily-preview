@@ -33,7 +33,25 @@ function createSupabaseFetch(supabaseKey: string): typeof fetch {
 }
 
 function createSupabaseAdminClient() {
-  const SUPABASE_URL = process.env.SUPABASE_URL;
+  // The project URL is not a secret, so we read it the same way the rest of the
+  // app does: `import.meta.env.VITE_SUPABASE_URL` is replaced with a string
+  // literal at build time and therefore survives on any host, while
+  // `process.env` covers runtime variables.
+  //
+  // This matters on Cloudflare: Nitro regenerates wrangler.json on every build,
+  // which wipes plaintext variables set by hand in the dashboard. Secrets are
+  // stored separately and survive — which is why SUPABASE_SERVICE_ROLE_KEY kept
+  // working while SUPABASE_URL silently disappeared and broke every checkout.
+  let buildUrl: string | undefined;
+  try {
+    buildUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  } catch {
+    /* import.meta.env unavailable in this runtime */
+  }
+
+  const SUPABASE_URL = buildUrl || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+
+  // The service role key must never be baked into a bundle. Runtime secret only.
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -41,7 +59,7 @@ function createSupabaseAdminClient() {
       ...(!SUPABASE_URL ? ["SUPABASE_URL"] : []),
       ...(!SUPABASE_SERVICE_ROLE_KEY ? ["SUPABASE_SERVICE_ROLE_KEY"] : []),
     ];
-    const message = `Missing Supabase environment variable(s): ${missing.join(", ")}. Connect Supabase in Lovable Cloud.`;
+    const message = `Missing Supabase environment variable(s): ${missing.join(", ")}. Set VITE_SUPABASE_URL at build time and SUPABASE_SERVICE_ROLE_KEY as a runtime secret.`;
     console.error(`[Supabase] ${message}`);
     throw new Error(message);
   }
