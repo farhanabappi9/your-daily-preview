@@ -18,7 +18,6 @@ import { Route as ContactRouteImport } from './routes/contact'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as ReturnPolicyRouteImport } from './routes/return-policy'
-import { Route as ShopRouteImport } from './routes/shop'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as ThankYouRouteImport } from './routes/thank-you'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
@@ -31,6 +30,7 @@ import { Route as AdminInventoryRouteImport } from './routes/admin.inventory'
 import { Route as AdminReportsRouteImport } from './routes/admin.reports'
 import { Route as AdminSettingsRouteImport } from './routes/admin.settings'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
+import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as CategorySlugRouteImport } from './routes/category.$slug'
 import { Route as InvoiceIdRouteImport } from './routes/invoice.$id'
@@ -85,11 +85,6 @@ const PrivacyRoute = PrivacyRouteImport.update({
 const ReturnPolicyRoute = ReturnPolicyRouteImport.update({
   id: '/return-policy',
   path: '/return-policy',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ShopRoute = ShopRouteImport.update({
-  id: '/shop',
-  path: '/shop',
   getParentRoute: () => rootRouteImport,
 } as any)
 const TermsRoute = TermsRouteImport.update({
@@ -152,6 +147,11 @@ const AdminUsersRoute = AdminUsersRouteImport.update({
   path: '/users',
   getParentRoute: () => AdminRoute,
 } as any)
+const ApiHealthRoute = ApiHealthRouteImport.update({
+  id: '/api/health',
+  path: '/api/health',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthCallbackRoute = AuthCallbackRouteImport.update({
   id: '/auth/callback',
   path: '/auth/callback',
@@ -213,7 +213,6 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/return-policy': typeof ReturnPolicyRoute
-  '/shop': typeof ShopRoute
   '/terms': typeof TermsRoute
   '/thank-you': typeof ThankYouRoute
   '/admin/banners': typeof AdminBannersRoute
@@ -225,6 +224,7 @@ export interface FileRoutesByFullPath {
   '/admin/reports': typeof AdminReportsRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/users': typeof AdminUsersRoute
+  '/api/health': typeof ApiHealthRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/category/$slug': typeof CategorySlugRoute
   '/invoice/$id': typeof InvoiceIdRoute
@@ -246,7 +246,6 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/return-policy': typeof ReturnPolicyRoute
-  '/shop': typeof ShopRoute
   '/terms': typeof TermsRoute
   '/thank-you': typeof ThankYouRoute
   '/admin/banners': typeof AdminBannersRoute
@@ -258,6 +257,7 @@ export interface FileRoutesByTo {
   '/admin/reports': typeof AdminReportsRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/users': typeof AdminUsersRoute
+  '/api/health': typeof ApiHealthRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/category/$slug': typeof CategorySlugRoute
   '/invoice/$id': typeof InvoiceIdRoute
@@ -281,7 +281,6 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/return-policy': typeof ReturnPolicyRoute
-  '/shop': typeof ShopRoute
   '/terms': typeof TermsRoute
   '/thank-you': typeof ThankYouRoute
   '/admin/banners': typeof AdminBannersRoute
@@ -293,6 +292,7 @@ export interface FileRoutesById {
   '/admin/reports': typeof AdminReportsRoute
   '/admin/settings': typeof AdminSettingsRoute
   '/admin/users': typeof AdminUsersRoute
+  '/api/health': typeof ApiHealthRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/category/$slug': typeof CategorySlugRoute
   '/invoice/$id': typeof InvoiceIdRoute
@@ -317,7 +317,6 @@ export interface FileRouteTypes {
     | '/login'
     | '/privacy'
     | '/return-policy'
-    | '/shop'
     | '/terms'
     | '/thank-you'
     | '/admin/banners'
@@ -329,6 +328,7 @@ export interface FileRouteTypes {
     | '/admin/reports'
     | '/admin/settings'
     | '/admin/users'
+    | '/api/health'
     | '/auth/callback'
     | '/category/$slug'
     | '/invoice/$id'
@@ -350,7 +350,6 @@ export interface FileRouteTypes {
     | '/login'
     | '/privacy'
     | '/return-policy'
-    | '/shop'
     | '/terms'
     | '/thank-you'
     | '/admin/banners'
@@ -362,6 +361,7 @@ export interface FileRouteTypes {
     | '/admin/reports'
     | '/admin/settings'
     | '/admin/users'
+    | '/api/health'
     | '/auth/callback'
     | '/category/$slug'
     | '/invoice/$id'
@@ -384,7 +384,6 @@ export interface FileRouteTypes {
     | '/login'
     | '/privacy'
     | '/return-policy'
-    | '/shop'
     | '/terms'
     | '/thank-you'
     | '/admin/banners'
@@ -396,6 +395,7 @@ export interface FileRouteTypes {
     | '/admin/reports'
     | '/admin/settings'
     | '/admin/users'
+    | '/api/health'
     | '/auth/callback'
     | '/category/$slug'
     | '/invoice/$id'
@@ -419,9 +419,9 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   PrivacyRoute: typeof PrivacyRoute
   ReturnPolicyRoute: typeof ReturnPolicyRoute
-  ShopRoute: typeof ShopRoute
   TermsRoute: typeof TermsRoute
   ThankYouRoute: typeof ThankYouRoute
+  ApiHealthRoute: typeof ApiHealthRoute
   AuthCallbackRoute: typeof AuthCallbackRoute
   CategorySlugRoute: typeof CategorySlugRoute
   InvoiceIdRoute: typeof InvoiceIdRoute
@@ -492,13 +492,6 @@ declare module '@tanstack/react-router' {
       path: '/return-policy'
       fullPath: '/return-policy'
       preLoaderRoute: typeof ReturnPolicyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/shop': {
-      id: '/shop'
-      path: '/shop'
-      fullPath: '/shop'
-      preLoaderRoute: typeof ShopRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/terms': {
@@ -584,6 +577,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/users'
       preLoaderRoute: typeof AdminUsersRouteImport
       parentRoute: typeof AdminRoute
+    }
+    '/api/health': {
+      id: '/api/health'
+      path: '/api/health'
+      fullPath: '/api/health'
+      preLoaderRoute: typeof ApiHealthRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/auth/callback': {
       id: '/auth/callback'
@@ -706,9 +706,9 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   PrivacyRoute: PrivacyRoute,
   ReturnPolicyRoute: ReturnPolicyRoute,
-  ShopRoute: ShopRoute,
   TermsRoute: TermsRoute,
   ThankYouRoute: ThankYouRoute,
+  ApiHealthRoute: ApiHealthRoute,
   AuthCallbackRoute: AuthCallbackRoute,
   CategorySlugRoute: CategorySlugRoute,
   InvoiceIdRoute: InvoiceIdRoute,
