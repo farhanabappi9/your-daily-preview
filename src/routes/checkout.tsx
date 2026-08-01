@@ -9,7 +9,21 @@ import { Check, Lock, MapPin, ShieldCheck, Truck, Wallet } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { formatSizes } from "@/lib/sizes";
 import { useProducts } from "@/lib/products-store";
-import { checkCoupon, placeOrder } from "@/lib/shop.functions";
+import { checkCoupon, ORDER_LIMITS, placeOrder } from "@/lib/shop.functions";
+
+/**
+ * Never show a raw validation payload to a shopper. Server functions now throw
+ * Bengali sentences, but a network failure or an unexpected error can still
+ * surface here — anything that looks like JSON gets replaced with plain advice.
+ */
+function readableOrderError(err: unknown): string {
+  const fallback = "অর্ডার সম্পন্ন হয়নি। ইন্টারনেট চেক করে আবার চেষ্টা করুন, অথবা ০১৭০৯-৬৮৭৩৮৯ নম্বরে কল করুন।";
+  const raw = (err as { message?: unknown })?.message;
+  if (typeof raw !== "string" || !raw.trim()) return fallback;
+  const message = raw.trim();
+  if (message.startsWith("{") || message.startsWith("[") || message.length > 200) return fallback;
+  return message;
+}
 
 export const Route = createFileRoute("/checkout")({
   head: () => ({
@@ -70,10 +84,10 @@ function Checkout() {
     try {
       const res = await placeOrder({
         data: {
-          name: form.name,
-          phone: form.phone,
-          address: form.address,
-          note: form.note,
+          name: form.name.trim(),
+          phone: form.phone.trim(),
+          address: form.address.trim(),
+          note: form.note.trim(),
           area: location,
           couponCode: discount > 0 ? coupon.trim() : "",
           items: items.map(({ product, quantity, sizes }) => ({
@@ -86,7 +100,7 @@ function Checkout() {
       clear();
       navigate({ to: "/thank-you", search: { order: res.id } });
     } catch (err: any) {
-      setOrderError(err?.message ?? "অর্ডার সম্পন্ন হয়নি, আবার চেষ্টা করুন।");
+      setOrderError(readableOrderError(err));
     } finally {
       setSubmitting(false);
     }
@@ -159,6 +173,7 @@ function Checkout() {
                   <label className="mb-1.5 block text-sm font-medium">{t("co.name")} *</label>
                   <input
                     required
+                    maxLength={ORDER_LIMITS.name}
                     placeholder={t("co.namePh")}
                     value={form.name}
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -171,6 +186,7 @@ function Checkout() {
                     required
                     type="tel"
                     inputMode="tel"
+                    maxLength={ORDER_LIMITS.phone}
                     placeholder={t("co.phonePh")}
                     value={form.phone}
                     onChange={(e) => setForm({ ...form, phone: e.target.value })}
@@ -182,6 +198,7 @@ function Checkout() {
                   <textarea
                     required
                     rows={3}
+                    maxLength={ORDER_LIMITS.address}
                     placeholder={t("co.addressPh")}
                     value={form.address}
                     onChange={(e) => setForm({ ...form, address: e.target.value })}
@@ -192,6 +209,7 @@ function Checkout() {
                   <label className="mb-1.5 block text-sm font-medium">{t("co.note")}</label>
                   <textarea
                     rows={2}
+                    maxLength={ORDER_LIMITS.note}
                     placeholder={t("co.notePh")}
                     value={form.note}
                     onChange={(e) => setForm({ ...form, note: e.target.value })}

@@ -2,9 +2,25 @@ import { createClient } from "@supabase/supabase-js";
 
 /** Publishable-key client for server-side calls to public SECURITY DEFINER RPCs. */
 export function publicServerClient() {
-  const url = process.env["SUPABASE_URL"] ?? process.env["VITE_SUPABASE_URL"];
+  // VITE_* values are baked into the bundle at build time, so they work even
+  // when the host has no runtime variables configured; process.env covers
+  // runtime secrets. Reading only process.env made the owner-status and repair
+  // buttons on the login screen fail silently on Cloudflare.
+  let buildUrl: string | undefined;
+  let buildKey: string | undefined;
+  try {
+    buildUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+    buildKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
+  } catch {
+    /* import.meta.env unavailable in this runtime */
+  }
+
+  const url = buildUrl || process.env["SUPABASE_URL"] || process.env["VITE_SUPABASE_URL"];
   const key =
-    process.env["SUPABASE_PUBLISHABLE_KEY"] ?? process.env["VITE_SUPABASE_PUBLISHABLE_KEY"];
+    buildKey ||
+    process.env["SUPABASE_PUBLISHABLE_KEY"] ||
+    process.env["VITE_SUPABASE_PUBLISHABLE_KEY"];
+
   if (!url || !key) throw new Error("Supabase URL / publishable key is not configured.");
   return createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },

@@ -31,20 +31,48 @@ function createSupabaseFetch(supabaseKey: string): typeof fetch {
   };
 }
 
+/**
+ * Resolve Supabase credentials for the Worker runtime.
+ *
+ * `import.meta.env.VITE_*` is replaced with a string literal at build time, so
+ * it survives on any host even when no runtime variable is configured.
+ * `process.env.*` covers runtime secrets set in the hosting dashboard.
+ *
+ * Reading only `process.env` broke the whole admin panel on Cloudflare:
+ * `amIAdmin()` threw before it could check anything, and the UI showed
+ * "Admin access যাচাই করা যায়নি" no matter how many times the owner logged in.
+ */
+function resolveSupabaseConfig(): { url: string; key: string } {
+  let buildUrl: string | undefined;
+  let buildKey: string | undefined;
+  try {
+    buildUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+    buildKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
+  } catch {
+    /* import.meta.env unavailable in this runtime */
+  }
+
+  const url = buildUrl || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key =
+    buildKey ||
+    process.env.SUPABASE_PUBLISHABLE_KEY ||
+    process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+  if (!url || !key) {
+    const missing = [
+      ...(!url ? ["SUPABASE_URL"] : []),
+      ...(!key ? ["SUPABASE_PUBLISHABLE_KEY"] : []),
+    ];
+    const message = `Missing Supabase environment variable(s): ${missing.join(", ")}. Set VITE_SUPABASE_URL + VITE_SUPABASE_PUBLISHABLE_KEY in the build environment, or SUPABASE_URL + SUPABASE_PUBLISHABLE_KEY as runtime variables.`;
+    console.error(`[Supabase] ${message}`);
+    throw new Error(message);
+  }
+  return { url, key };
+}
+
 export const requireSupabaseAuth = createMiddleware({ type: "function" }).server(
   async ({ next }) => {
-    const SUPABASE_URL = process.env.SUPABASE_URL;
-    const SUPABASE_PUBLISHABLE_KEY = process.env.SUPABASE_PUBLISHABLE_KEY;
-
-    if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
-      const missing = [
-        ...(!SUPABASE_URL ? ["SUPABASE_URL"] : []),
-        ...(!SUPABASE_PUBLISHABLE_KEY ? ["SUPABASE_PUBLISHABLE_KEY"] : []),
-      ];
-      const message = `Missing Supabase environment variable(s): ${missing.join(", ")}. Connect Supabase in Lovable Cloud.`;
-      console.error(`[Supabase] ${message}`);
-      throw new Error(message);
-    }
+    const { url: SUPABASE_URL, key: SUPABASE_PUBLISHABLE_KEY } = resolveSupabaseConfig();
 
     const request = getRequest();
 

@@ -1,284 +1,314 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { Header } from "@/components/Header";
-import { Footer } from "@/components/Footer";
-import { ProductCard } from "@/components/ProductCard";
-import { categories } from "@/lib/products";
-import { useProducts } from "@/lib/products-store";
-import { formatMoney, formatNumber } from "@/lib/format";
-import { LayoutGrid, List, RotateCcw, Search, SlidersHorizontal } from "lucide-react";
-import { useMemo, useState } from "react";
-import { useI18n } from "@/lib/i18n";
+import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
+import type { DbBanner, DbCategory, DbProduct, ShopSettings } from "./shop-types";
+import { DEFAULT_SETTINGS } from "./shop-types";
+import { publicClient } from "./shop.server";
 
-export const Route = createFileRoute("/shop")({
-  validateSearch: (search: Record<string, unknown>): { q?: string } => ({
-    q: typeof search.q === "string" && search.q ? search.q : undefined,
-  }),
-  head: () => ({
-    meta: [
-      { title: "Shop All Products — Ahsan Fashion" },
-      {
-        name: "description",
-        content:
-          "Browse premium sarees, panjabis, three piece sets and gift combos with cash on delivery across Bangladesh.",
-      },
-      { property: "og:title", content: "Shop All Products — Ahsan Fashion" },
-      {
-        property: "og:description",
-        content:
-          "Browse premium sarees, panjabis, three piece sets and gift combos with cash on delivery.",
-      },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-    ],
-  }),
-  component: Shop,
+export const getStorefront = createServerFn({ method: "GET" }).handler(async () => {
+  let db: ReturnType<typeof publicClient>;
+  try {
+    db = publicClient();
+  } catch (e: any) {
+    // Config problem — log loudly so it shows up in `wrangler tail` / host logs
+    // instead of silently rendering an empty shop.
+    console.error("[storefront] Supabase client could not be created:", e?.message ?? e);
+    return {
+      products: [] as DbProduct[],
+      categories: [] as DbCategory[],
+      banners: [] as DbBanner[],
+      settings: DEFAULT_SETTINGS,
+      error: String(e?.message ?? e),
+    };
+  }
+
+  const [products, categories, banners, settings] = await Promise.all([
+    db.from("products").select("*").eq("active", true).order("sort_order", { ascending: true }),
+    db.from("categories").select("*").eq("active", true).order("sort_order", { ascending: true }),
+    db.from("banners").select("*").eq("active", true).order("sort_order", { ascending: true }),
+    db.from("settings").select("value").eq("key", "shop").maybeSingle(),
+  ]);
+
+  // Previously every one of these errors was swallowed by `?? []`, which turned
+  // an RLS/permission/connection failure into a silently empty storefront.
+  const failures = [
+    products.error && `products: ${products.error.message}`,
+    categories.error && `categories: ${categories.error.message}`,
+    banners.error && `banners: ${banners.error.message}`,
+    settings.error && `settings: ${settings.error.message}`,
+  ].filter(Boolean) as string[];
+
+  if (failures.length) console.error("[storefront] Supabase query failed —", failures.join(" | "));
+
+  return {
+    products: (products.data ?? []) as DbProduct[],
+    categories: (categories.data ?? []) as DbCategory[],
+    banners: (banners.data ?? []) as DbBanner[],
+    settings: {
+      ...DEFAULT_SETTINGS,
+      ...((settings.data?.value ?? {}) as Partial<ShopSettings>),
+    } as ShopSettings,
+    error: failures.length ? failures.join(" | ") : null,
+  };
 });
 
-function Shop() {
-  const { products } = useProducts();
-  const { t, lang } = useI18n();
-  const { q: initialQ } = Route.useSearch();
-  const [q, setQ] = useState(initialQ ?? "");
+export const getProductBySlug = createServerFn({ method: "GET" })
+  .inputValidator((d: { slug: string }) => z.object({ slug: z.string().max(200) }).parse(d))
+  .handler(async ({ data }) => {
+    const db = publicClient();
+    const { data: row, error } = await db
+      .from("products")
+      .select("*")
+      .eq("slug", data.slug)
+      .eq("active", true)
+      .maybeSingle();
+    if (error) console.error("[storefront] getProductBySlug failed:", error.message);
+    return (row ?? null) as DbProduct | null;
+  });
 
-  const [cat, setCat] = useState<string>("all");
-  const [sort, setSort] = useState<"newest" | "price-asc" | "price-desc" | "discount">("newest");
-  const [view, setView] = useState<"grid" | "list">("grid");
-  const [filtersOpen, setFiltersOpen] = useState(false);
+export const checkCoupon = createServerFn({ method: "POST" })
+  .inputValidator((d: { code: string; subtotal: number }) =>
+    z.object({ code: z.string().trim().min(1).max(40), subtotal: z.number().min(0) }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const db = publicClient();
+    const { data: c } = await db
+      .from("coupons")
+      .select("*")
+      .ilike("code", data.code)
+      .eq("active", true)
+      .maybeSingle();
+    if (!c) return { ok: false as const, message: "কুপন কোড সঠিক নয়" };
+    if (c.expires_at && new Date(c.expires_at) < new Date())
+      return { ok: false as const, message: "কুপনের মেয়াদ শেষ" };
+    if (Number(data.subtotal) < Number(c.min_order))
+      return { ok: false as const, message: `সর্বনিম্ন অর্ডার ৳${c.min_order}` };
+    const discount =
+      c.type === "percent"
+        ? Math.round((Number(data.subtotal) * Number(c.value)) / 100)
+        : Math.round(Number(c.value));
+    return {
+      ok: true as const,
+      code: c.code as string,
+      discount: Math.min(discount, Number(data.subtotal)),
+    };
+  });
 
-  const maxPriceAll = useMemo(() => Math.max(1000, ...products.map((p) => p.price)), [products]);
-  const [maxPrice, setMaxPrice] = useState<number | null>(null);
-  const priceCap = maxPrice ?? maxPriceAll;
+const SIZE_LABEL: Record<string, string> = { men: "ছেলেদের", women: "মেয়েদের", size: "সাইজ" };
+const sizeSuffix = (sizes?: Record<string, string>) =>
+  Object.entries(sizes ?? {})
+    .map(([k, v]) => `${SIZE_LABEL[k] ?? k}: ${v}`)
+    .join(", ");
 
-  const avgDiscount = useMemo(() => {
-    if (!products.length) return 0;
-    const sum = products.reduce((a, p) => a + ((p.oldPrice - p.price) / p.oldPrice) * 100, 0);
-    return Math.round(sum / products.length);
-  }, [products]);
+/** Maximum lengths — keep these in sync with the `maxLength` props in checkout.tsx. */
+export const ORDER_LIMITS = { name: 100, phone: 20, address: 500, note: 500, coupon: 40 } as const;
 
-  const filtered = useMemo(() => {
-    let list = products.filter((p) => (cat === "all" ? true : p.categorySlug === cat));
-    list = list.filter((p) => p.price <= priceCap);
-    if (q.trim()) {
-      const s = q.trim().toLowerCase();
-      list = list.filter(
-        (p) =>
-          p.name.toLowerCase().includes(s) ||
-          p.category.toLowerCase().includes(s) ||
-          p.description.toLowerCase().includes(s),
-      );
-    }
-    if (sort === "price-asc") list = [...list].sort((a, b) => a.price - b.price);
-    else if (sort === "price-desc") list = [...list].sort((a, b) => b.price - a.price);
-    else if (sort === "discount")
-      list = [...list].sort(
-        (a, b) => (b.oldPrice - b.price) / b.oldPrice - (a.oldPrice - a.price) / a.oldPrice,
-      );
-    return list;
-  }, [products, q, cat, sort, priceCap]);
+const orderInput = z.object({
+  name: z.string().trim().min(2).max(ORDER_LIMITS.name),
+  phone: z.string().trim().min(6).max(ORDER_LIMITS.phone),
+  address: z.string().trim().min(5).max(ORDER_LIMITS.address),
+  note: z.string().trim().max(ORDER_LIMITS.note).optional().default(""),
+  area: z.enum(["inside", "outside"]),
+  couponCode: z.string().trim().max(ORDER_LIMITS.coupon).optional().default(""),
+  items: z
+    .array(
+      z.object({
+        slug: z.string().max(200),
+        quantity: z.number().int().min(1).max(50),
+        sizes: z.record(z.string().max(20), z.string().max(30)).optional().default({}),
+      }),
+    )
+    .min(1)
+    .max(50),
+});
 
-  const reset = () => {
-    setQ("");
-    setCat("all");
-    setSort("newest");
+const FIELD_LABEL: Record<string, string> = {
+  name: "নাম",
+  phone: "মোবাইল নম্বর",
+  address: "ঠিকানা",
+  note: "নোট",
+  area: "ডেলিভারি এলাকা",
+  couponCode: "কুপন কোড",
+  items: "কার্ট",
+};
 
-    setMaxPrice(null);
-  };
+/**
+ * Turns a Zod failure into a single sentence the customer can act on.
+ *
+ * Without this the raw issue array was serialised straight into the error
+ * message and rendered under the confirm button — the shopper saw JSON like
+ * `[{"code":"too_big","path":["name"]}]` and simply abandoned the order.
+ */
+function friendlyOrderError(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return "তথ্য সঠিকভাবে পূরণ করুন।";
 
-  return (
-    <div className="min-h-screen bg-background">
-      <Header />
+  const field = String(issue.path[0] ?? "");
+  const label = FIELD_LABEL[field] ?? field;
 
-      {/* Hero band */}
-      <section className="border-b border-border/60 bg-gradient-hero">
-        <div className="mx-auto max-w-7xl px-4 py-10 sm:py-14">
-          <span className="inline-block rounded-full border border-primary/25 bg-card/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">
-            {t("shop.kicker")}
-          </span>
-          <h1 className="mt-3 font-display text-3xl font-bold leading-tight sm:text-5xl">
-            {t("shop.title")}
-          </h1>
-          <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground sm:text-base">
-            {t("shop.subtitle")}
-          </p>
-          <dl className="mt-6 grid max-w-lg grid-cols-3 gap-3">
-            {[
-              { v: formatNumber(products.length, lang), l: t("shop.stat1") },
-              { v: formatNumber(categories.length, lang), l: t("shop.stat2") },
-              { v: `${formatNumber(avgDiscount, lang)}%`, l: t("shop.stat3") },
-            ].map((s) => (
-              <div
-                key={s.l}
-                className="rounded-2xl border border-border/60 bg-card/70 p-3 text-center shadow-card"
-              >
-                <dt className="num text-2xl text-primary sm:text-3xl">{s.v}</dt>
-                <dd className="mt-0.5 text-[11px] font-medium text-muted-foreground">{s.l}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      </section>
+  if (field === "items") return "কার্টে কোনো পণ্য নেই। আবার চেষ্টা করুন।";
 
-      <main className="mx-auto max-w-7xl px-4 py-8">
-        <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
-          {/* Filters */}
-          <aside className="lg:sticky lg:top-28 lg:self-start">
-            <div className="rounded-2xl border border-border/60 bg-card p-4 shadow-card">
-              <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setFiltersOpen((v) => !v)}
-                  aria-expanded={filtersOpen}
-                  className="flex min-w-0 items-center gap-2 text-left lg:pointer-events-none"
-                >
-                  <SlidersHorizontal className="h-4 w-4 shrink-0 text-primary" />
-                  <h2 className="truncate text-sm font-bold uppercase tracking-wider">
-                    {t("shop.filters")}
-                  </h2>
-                  <span
-                    className={`ml-1 text-xs text-muted-foreground transition lg:hidden ${filtersOpen ? "rotate-180" : ""}`}
-                  >
-                    ▾
-                  </span>
-                </button>
-                <button
-                  onClick={reset}
-                  className="flex min-h-9 shrink-0 items-center gap-1 rounded-full border border-input px-3 py-1 text-[11px] font-semibold text-muted-foreground transition hover:border-primary/40 hover:text-primary"
-                >
-                  <RotateCcw className="h-3 w-3" /> {t("shop.reset")}
-                </button>
-              </div>
-
-              <div className={`${filtersOpen ? "block" : "hidden"} lg:block`}>
-                <div className="relative mt-4">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <input
-                    value={q}
-                    onChange={(e) => setQ(e.target.value)}
-                    placeholder={t("shop.searchPh")}
-                    className="w-full rounded-full border bg-background py-2.5 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
-                  />
-                </div>
-
-                <div className="mt-5">
-                  <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    {t("shop.category")}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 lg:flex-col lg:flex-nowrap">
-                    {[
-                      { slug: "all", name: t("shop.allCat") },
-                      ...categories.map((c) => ({
-                        slug: c.slug,
-                        name: lang === "bn" ? c.name : c.nameEn,
-                      })),
-                    ].map((c) => (
-                      <button
-                        key={c.slug}
-                        onClick={() => setCat(c.slug)}
-                        className={`rounded-full px-3 py-1.5 text-left text-sm transition ${
-                          cat === c.slug
-                            ? "bg-gradient-primary font-semibold text-primary-foreground shadow"
-                            : "border border-border/60 hover:border-primary/40 hover:text-primary"
-                        }`}
-                      >
-                        {c.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="mt-5">
-                  <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    <span>{t("shop.priceRange")}</span>
-                    <span className="num text-sm normal-case tracking-normal text-primary">
-                      {formatMoney(priceCap, lang)}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min={200}
-                    max={maxPriceAll}
-                    step={50}
-                    value={priceCap}
-                    onChange={(e) => setMaxPrice(Number(e.target.value))}
-                    className="w-full accent-[var(--primary)]"
-                  />
-                </div>
-              </div>
-            </div>
-          </aside>
-
-          {/* Results */}
-          <div>
-            <div className="mb-5 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-border/60 bg-card p-3 shadow-card sm:flex sm:justify-between">
-              <p className="min-w-0 truncate text-sm text-muted-foreground">
-                {t("shop.showing")}{" "}
-                <span className="num text-base text-foreground">
-                  {formatNumber(filtered.length, lang)}
-                </span>{" "}
-                {t("shop.of")}{" "}
-                <span className="num text-base text-foreground">
-                  {formatNumber(products.length, lang)}
-                </span>{" "}
-                {t("shop.found")}
-              </p>
-              <div className="flex shrink-0 items-center gap-2">
-                <select
-                  value={sort}
-                  onChange={(e) => setSort(e.target.value as typeof sort)}
-                  className="rounded-full border bg-background px-3 py-2 text-sm"
-                  aria-label={t("shop.sortBy")}
-                >
-                  <option value="newest">{t("shop.newest")}</option>
-                  <option value="price-asc">{t("shop.priceAsc")}</option>
-                  <option value="price-desc">{t("shop.priceDesc")}</option>
-                  <option value="discount">{t("shop.discountFirst")}</option>
-                </select>
-                <div className="hidden items-center rounded-full border p-0.5 sm:flex">
-                  <button
-                    aria-label={t("shop.grid")}
-                    onClick={() => setView("grid")}
-                    className={`rounded-full p-1.5 transition ${view === "grid" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
-                  >
-                    <LayoutGrid className="h-4 w-4" />
-                  </button>
-                  <button
-                    aria-label={t("shop.list")}
-                    onClick={() => setView("list")}
-                    className={`rounded-full p-1.5 transition ${view === "list" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
-                  >
-                    <List className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {filtered.length === 0 ? (
-              <div className="rounded-2xl border bg-card p-12 text-center text-muted-foreground shadow-card">
-                {t("shop.none")}
-              </div>
-            ) : (
-              <div
-                className={
-                  view === "grid"
-                    ? "grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4"
-                    : "flex flex-col gap-4"
-                }
-              >
-                {filtered.map((p, i) => (
-                  <div
-                    key={p.id}
-                    className="animate-fade-in-up"
-                    style={{ animationDelay: `${Math.min(i, 12) * 40}ms` }}
-                  >
-                    <ProductCard p={p} view={view} />
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </main>
-      <Footer />
-    </div>
-  );
+  switch (issue.code) {
+    case "too_big":
+      return `${label} সর্বোচ্চ ${(issue as { maximum?: number }).maximum} অক্ষরের হতে পারে। একটু ছোট করে লিখুন।`;
+    case "too_small":
+      return field === "phone"
+        ? "সঠিক মোবাইল নম্বর দিন (কমপক্ষে ৬ ডিজিট)।"
+        : `${label} আরও বিস্তারিত লিখুন (কমপক্ষে ${(issue as { minimum?: number }).minimum} অক্ষর)।`;
+    case "invalid_type":
+      return `${label} পূরণ করুন।`;
+    default:
+      return `${label} সঠিকভাবে পূরণ করুন।`;
+  }
 }
+
+export const placeOrder = createServerFn({ method: "POST" })
+  .inputValidator((d: z.input<typeof orderInput>) => {
+    const parsed = orderInput.safeParse(d);
+    if (!parsed.success) throw new Error(friendlyOrderError(parsed.error));
+    return parsed.data;
+  })
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const db = supabaseAdmin as any;
+
+    const slugs = data.items.map((i) => i.slug);
+    const { data: products, error: lookupError } = await db
+      .from("products")
+      .select("*")
+      .in("slug", slugs)
+      .eq("active", true);
+    if (lookupError) {
+      console.error("[order] product lookup failed:", lookupError.message);
+      throw new Error("পণ্য যাচাই করা যায়নি, একটু পরে আবার চেষ্টা করুন।");
+    }
+    const list = (products ?? []) as DbProduct[];
+    if (!list.length) {
+      throw new Error("কার্টের পণ্যগুলো এখন আর পাওয়া যাচ্ছে না। পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।");
+    }
+
+    const items = data.items
+      .map((i) => {
+        const p = list.find((x) => x.slug === i.slug);
+        if (!p) return null;
+        return {
+          product_id: p.id,
+          name: sizeSuffix(i.sizes) ? `${p.name} (${sizeSuffix(i.sizes)})` : p.name,
+          price: Number(p.price),
+          quantity: i.quantity,
+          image: p.images?.[0] ?? null,
+        };
+      })
+      .filter(Boolean) as {
+      product_id: string;
+      name: string;
+      price: number;
+      quantity: number;
+      image: string | null;
+    }[];
+
+    const subtotal = items.reduce((s, i) => s + i.price * i.quantity, 0);
+
+    const { data: settingRow } = await db
+      .from("settings")
+      .select("value")
+      .eq("key", "shop")
+      .maybeSingle();
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      ...((settingRow?.value ?? {}) as Partial<ShopSettings>),
+    };
+    let shipping =
+      data.area === "inside" ? Number(settings.shippingInside) : Number(settings.shippingOutside);
+    if (settings.freeShippingOver > 0 && subtotal >= settings.freeShippingOver) shipping = 0;
+
+    let discount = 0;
+    let couponCode: string | null = null;
+    if (data.couponCode) {
+      const { data: c } = await db
+        .from("coupons")
+        .select("*")
+        .ilike("code", data.couponCode)
+        .eq("active", true)
+        .maybeSingle();
+      if (
+        c &&
+        (!c.expires_at || new Date(c.expires_at) >= new Date()) &&
+        subtotal >= Number(c.min_order)
+      ) {
+        discount = Math.min(
+          c.type === "percent"
+            ? Math.round((subtotal * Number(c.value)) / 100)
+            : Math.round(Number(c.value)),
+          subtotal,
+        );
+        couponCode = c.code;
+        await db
+          .from("coupons")
+          .update({ used_count: Number(c.used_count) + 1 })
+          .eq("id", c.id);
+      }
+    }
+
+    const total = Math.max(0, subtotal - discount) + shipping;
+    const orderNo = "AF" + Date.now().toString().slice(-8);
+
+    const { data: order, error } = await db
+      .from("orders")
+      .insert({
+        order_no: orderNo,
+        customer_name: data.name,
+        phone: data.phone,
+        address: data.address,
+        note: data.note || null,
+        area: data.area,
+        subtotal,
+        shipping,
+        discount,
+        total,
+        coupon_code: couponCode,
+        status: "pending",
+      })
+      .select("id, order_no")
+      .single();
+    if (error) {
+      console.error("[order] insert failed:", error.message);
+      throw new Error("অর্ডার সংরক্ষণ করা যায়নি। একটু পরে আবার চেষ্টা করুন অথবা আমাদের কল করুন।");
+    }
+
+    await db.from("order_items").insert(items.map((i) => ({ ...i, order_id: order.id })));
+    await db
+      .from("order_status_history")
+      .insert({ order_id: order.id, status: "pending", note: "Order placed" });
+
+    for (const i of items) {
+      const p = list.find((x) => x.id === i.product_id)!;
+      await db
+        .from("products")
+        .update({ stock: Math.max(0, Number(p.stock) - i.quantity) })
+        .eq("id", p.id);
+    }
+
+    return {
+      id: order.id as string,
+      orderNo: order.order_no as string,
+      total,
+      subtotal,
+      shipping,
+      discount,
+    };
+  });
+
+export const getOrderReceipt = createServerFn({ method: "GET" })
+  .inputValidator((d: { id: string }) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const db = supabaseAdmin as any;
+    const { data: order } = await db
+      .from("orders")
+      .select(
+        "id, order_no, customer_name, phone, address, area, subtotal, shipping, discount, total, status, created_at, order_items(*)",
+      )
+      .eq("id", data.id)
+      .maybeSingle();
+    return order ?? null;
+  });
