@@ -5,13 +5,40 @@ import { DEFAULT_SETTINGS } from "./shop-types";
 import { publicClient } from "./shop.server";
 
 export const getStorefront = createServerFn({ method: "GET" }).handler(async () => {
-  const db = publicClient();
+  let db: ReturnType<typeof publicClient>;
+  try {
+    db = publicClient();
+  } catch (e: any) {
+    // Config problem — log loudly so it shows up in `wrangler tail` / host logs
+    // instead of silently rendering an empty shop.
+    console.error("[storefront] Supabase client could not be created:", e?.message ?? e);
+    return {
+      products: [] as DbProduct[],
+      categories: [] as DbCategory[],
+      banners: [] as DbBanner[],
+      settings: DEFAULT_SETTINGS,
+      error: String(e?.message ?? e),
+    };
+  }
+
   const [products, categories, banners, settings] = await Promise.all([
     db.from("products").select("*").eq("active", true).order("sort_order", { ascending: true }),
     db.from("categories").select("*").eq("active", true).order("sort_order", { ascending: true }),
     db.from("banners").select("*").eq("active", true).order("sort_order", { ascending: true }),
     db.from("settings").select("value").eq("key", "shop").maybeSingle(),
   ]);
+
+  // Previously every one of these errors was swallowed by `?? []`, which turned
+  // an RLS/permission/connection failure into a silently empty storefront.
+  const failures = [
+    products.error && `products: ${products.error.message}`,
+    categories.error && `categories: ${categories.error.message}`,
+    banners.error && `banners: ${banners.error.message}`,
+    settings.error && `settings: ${settings.error.message}`,
+  ].filter(Boolean) as string[];
+
+  if (failures.length) console.error("[storefront] Supabase query failed —", failures.join(" | "));
+
   return {
     products: (products.data ?? []) as DbProduct[],
     categories: (categories.data ?? []) as DbCategory[],
@@ -20,6 +47,7 @@ export const getStorefront = createServerFn({ method: "GET" }).handler(async () 
       ...DEFAULT_SETTINGS,
       ...((settings.data?.value ?? {}) as Partial<ShopSettings>),
     } as ShopSettings,
+    error: failures.length ? failures.join(" | ") : null,
   };
 });
 
@@ -27,12 +55,13 @@ export const getProductBySlug = createServerFn({ method: "GET" })
   .inputValidator((d: { slug: string }) => z.object({ slug: z.string().max(200) }).parse(d))
   .handler(async ({ data }) => {
     const db = publicClient();
-    const { data: row } = await db
+    const { data: row, error } = await db
       .from("products")
       .select("*")
       .eq("slug", data.slug)
       .eq("active", true)
       .maybeSingle();
+    if (error) console.error("[storefront] getProductBySlug failed:", error.message);
     return (row ?? null) as DbProduct | null;
   });
 
@@ -96,11 +125,15 @@ export const placeOrder = createServerFn({ method: "POST" })
     const db = supabaseAdmin as any;
 
     const slugs = data.items.map((i) => i.slug);
-    const { data: products } = await db
+    const { data: products, error: lookupError } = await db
       .from("products")
       .select("*")
       .in("slug", slugs)
       .eq("active", true);
+    if (lookupError) {
+      console.error("[order] product lookup failed:", lookupError.message);
+      throw new Error("পণ্য যাচাই করা যায়নি, একটু পরে আবার চেষ্টা করুন।");
+    }
     const list = (products ?? []) as DbProduct[];
     if (!list.length) throw new Error("No valid products in order");
 
