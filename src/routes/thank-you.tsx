@@ -7,6 +7,8 @@ import { useQuery } from "@tanstack/react-query";
 import { getOrderReceipt } from "@/lib/shop.functions";
 import { useI18n } from "@/lib/i18n";
 import { formatMoney, formatNumber } from "@/lib/format";
+import { trackPurchase } from "@/lib/pixel";
+import { useEffect, useRef } from "react";
 
 type SavedOrder = {
   orderId: string;
@@ -70,6 +72,21 @@ function ThankYou() {
     : null;
 
   const subtotal = data?.subtotal ?? 0;
+
+  // Purchase is reported from the confirmed receipt, not from the cart, so the
+  // value Meta sees always matches what the database actually recorded.
+  // The ref guards against a re-render firing a duplicate; the order number is
+  // also sent as the event ID so a page refresh is deduplicated server-side.
+  const reportedOrder = useRef<string | null>(null);
+  useEffect(() => {
+    if (!data?.orderId || reportedOrder.current === data.orderId) return;
+    reportedOrder.current = data.orderId;
+    trackPurchase({
+      orderNo: data.orderId,
+      value: data.total,
+      items: data.items.map((i) => ({ name: i.name, quantity: i.quantity })),
+    });
+  }, [data?.orderId, data?.total, data?.items]);
 
   return (
     <div className="min-h-screen bg-background">

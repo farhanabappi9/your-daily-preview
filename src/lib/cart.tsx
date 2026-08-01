@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import type { Product } from "./products";
+import { trackAddToCart } from "./pixel";
 import { sizeSignature } from "./sizes";
 
 export type CartItem = {
@@ -48,6 +49,10 @@ export function CartProvider({ children }: { children: ReactNode }) {
   }, [items, hydrated]);
 
   const add: CartCtx["add"] = (p, qty = 1, sizes) => {
+    // Tracked here rather than in each button so every path into the cart —
+    // product page, quick-add on a card, related products — is counted once.
+    trackAddToCart({ slug: p.slug, name: p.name, price: p.price, quantity: qty });
+
     const key = itemKey(p, sizes);
     setItems((prev) => {
       const found = prev.find((i) => i.key === key);

@@ -7,7 +7,7 @@ import {
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -15,6 +15,14 @@ import { CartProvider } from "../lib/cart";
 import { ProductsProvider } from "../lib/products-store";
 import { I18nProvider } from "../lib/i18n";
 import { ThemeCustomizer } from "../components/ThemeCustomizer";
+import { useProducts } from "../lib/products-store";
+import { useCart } from "../lib/cart";
+import {
+  META_PIXEL_ID,
+  trackInitiateCheckout,
+  trackPageView,
+  trackViewContent,
+} from "../lib/pixel";
 
 function NotFoundComponent() {
   return (
@@ -115,11 +123,38 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   errorComponent: ErrorComponent,
 });
 
+/**
+ * Meta Pixel base code, injected server-side so it is in the HTML from the
+ * first byte. It only bootstraps `fbq` and fires the first PageView — every
+ * later PageView comes from PixelRouteTracker below, because SPA navigation
+ * never reloads the document.
+ */
+const META_PIXEL_SNIPPET = `!function(f,b,e,v,n,t,s)
+{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;s=b.getElementsByTagName(e)[0];
+s.parentNode.insertBefore(t,s)}(window, document,'script',
+'https://connect.facebook.net/en_US/fbevents.js');
+fbq('init', '${META_PIXEL_ID}');
+fbq('track', 'PageView');`;
+
 function RootShell({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <head>
         <HeadContent />
+        <script dangerouslySetInnerHTML={{ __html: META_PIXEL_SNIPPET }} />
+        <noscript>
+          <img
+            height="1"
+            width="1"
+            style={{ display: "none" }}
+            alt=""
+            src={`https://www.facebook.com/tr?id=${META_PIXEL_ID}&ev=PageView&noscript=1`}
+          />
+        </noscript>
       </head>
       <body>
         {children}
@@ -127,6 +162,53 @@ function RootShell({ children }: { children: ReactNode }) {
       </body>
     </html>
   );
+}
+
+/**
+ * Fires the events that can be derived purely from the URL:
+ *   - PageView on every navigation
+ *   - ViewContent on a product page
+ *   - InitiateCheckout when the checkout screen opens
+ *
+ * The first PageView is skipped because the base snippet already sent it.
+ * AddToCart lives in the cart provider, Purchase in the thank-you route —
+ * both need data the URL alone does not carry.
+ */
+function PixelRouteTracker() {
+  const router = useRouter();
+  const pathname = router.state.location.pathname;
+  const firstRender = useRef(true);
+  const { getBySlug } = useProducts();
+  const { items, subtotal } = useCart();
+
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false;
+    } else {
+      trackPageView();
+    }
+
+    const productMatch = pathname.match(/^\/product\/(.+)$/);
+    if (productMatch) {
+      const product = getBySlug(decodeURIComponent(productMatch[1]));
+      if (product) {
+        trackViewContent({ slug: product.slug, name: product.name, price: product.price });
+      }
+      return;
+    }
+
+    if (pathname === "/checkout" && items.length > 0) {
+      trackInitiateCheckout({
+        items: items.map((i) => ({ slug: i.slug, quantity: i.quantity })),
+        value: subtotal,
+      });
+    }
+    // `items`/`subtotal` are intentionally excluded: the checkout event should
+    // fire once when the page opens, not again on every cart tweak.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname, getBySlug]);
+
+  return null;
 }
 
 function RootComponent() {
@@ -139,6 +221,7 @@ function RootComponent() {
           <I18nProvider>
             <Outlet />
             <ThemeCustomizer />
+            <PixelRouteTracker />
           </I18nProvider>
         </CartProvider>
       </ProductsProvider>
