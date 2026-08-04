@@ -7,8 +7,8 @@ function steadfastCredentials(): { apiKey: string; secretKey: string } {
   const secretKey = process.env.STEADFAST_SECRET_KEY;
   if (!apiKey || !secretKey) {
     const missing = [
-      ...(!apiKey ? ["STEADFAST_API_KEY"] : []),
-      ...(!secretKey ? ["STEADFAST_SECRET_KEY"] : []),
+      ...(!apiKey ? ["nikqu70tfoeia5kervp4sq5wdsepsaa4"] : []),
+      ...(!secretKey ? ["am9azoyu7wyuevblgbk0vyys"] : []),
     ];
     throw new Error(`Missing Steadfast credential(s): ${missing.join(", ")}.`);
   }
@@ -113,18 +113,23 @@ export async function getSteadfastStatusByConsignmentId(
   return steadfastFetch(`/status_by_cid/${encodeURIComponent(String(consignmentId))}`);
 }
 
-/**
- * Steadfast delivery_status webhook-এর `status` field lowercase আর capitalized
- * দুই রকমই আসতে পারে (তাদের নিজস্ব ডকুমেন্টেশনেই example capitalized, field-table
- * lowercase দেখায়) — তাই সবসময় normalize করে compare করি।
- * সম্ভাব্য মান: pending, delivered, partial_delivered, cancelled, unknown
- * (আগে create_order/status API নিজে থেকে hold, in_review-ও দিতে পারে, সেগুলোও রাখলাম)
- */
 export function mapSteadfastStatusToOrderStatus(courierStatus: string): string | null {
-  const s = courierStatus.trim().toLowerCase();
-  if (s === "delivered" || s === "partial_delivered") return "delivered";
-  if (s === "cancelled") return "cancelled";
-  if (s === "hold" || s === "in_review" || s === "pending") return "shipped";
-  return null; // "unknown" বা অচেনা কোনো মান — নিজেদের status অপরিবর্তিত রাখি
+  if (courierStatus === "delivered" || courierStatus === "partial_delivered") return "delivered";
+  if (courierStatus === "cancelled") return "cancelled";
+  if (courierStatus === "hold" || courierStatus === "in_review" || courierStatus === "pending") {
+    return "shipped";
+  }
+  return null;
+}
+
+export function verifySteadfastWebhookToken(authorizationHeader: string | null): boolean {
+  const expected = process.env.STEADFAST_WEBHOOK_TOKEN;
+  if (!expected) {
+    console.error("[steadfast] STEADFAST_WEBHOOK_TOKEN not configured — rejecting webhook");
+    return false;
+  }
+  if (!authorizationHeader) return false;
+  const token = authorizationHeader.replace(/^Bearer\s+/i, "").trim();
+  return token === expected;
 }
 
