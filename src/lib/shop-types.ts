@@ -200,8 +200,8 @@ export const DEFAULT_SETTINGS: ShopSettings = {
   address: "",
   facebook: "",
   instagram: "",
-  shippingInside: 80,
-  shippingOutside: 150,
+  shippingInside: 70,
+  shippingOutside: 130,
   freeShippingOver: 0,
   sizeConfig: {},
   invoice: DEFAULT_INVOICE,
@@ -215,4 +215,3 @@ export function invoiceSettings(s?: ShopSettings | null): InvoiceSettings {
 export function contentSettings(s?: ShopSettings | null): ContentSettings {
   return { ...DEFAULT_CONTENT, ...(s?.content ?? {}) };
 }
-

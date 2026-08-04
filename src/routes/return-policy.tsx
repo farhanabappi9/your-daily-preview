@@ -40,7 +40,7 @@ function ReturnPolicy() {
               <p>সাইজ সমস্যার ক্ষেত্রে ৭ দিনের মধ্যে এক্সচেঞ্জ সুবিধা রয়েছে।</p>
               <h2 className="pt-2 text-xl font-semibold text-foreground">৪. শিপিং</h2>
               <p>
-                ঢাকার ভিতরে ৳ ৮০ এবং বাইরে ৳ ১৫০ ডেলিভারি চার্জ প্রযোজ্য। ২,০০০ টাকার বেশি অর্ডারে
+                ঢাকার ভিতরে ৳ ৭০ এবং বাইরে ৳ ১৩০ ডেলিভারি চার্জ প্রযোজ্য। ২,০০০ টাকার বেশি অর্ডারে
                 ফ্রি শিপিং।
               </p>
               <h2 className="pt-2 text-xl font-semibold text-foreground">৫. যোগাযোগ</h2>
@@ -63,7 +63,7 @@ function ReturnPolicy() {
               <p>Size exchanges are available within 7 days.</p>
               <h2 className="pt-2 text-xl font-semibold text-foreground">4. Shipping</h2>
               <p>
-                Delivery charge: ৳ 80 inside Dhaka, ৳ 150 outside. Free shipping on orders above ৳
+                Delivery charge: ৳ 70 inside Dhaka, ৳ 130 outside. Free shipping on orders above ৳
                 2,000.
               </p>
               <h2 className="pt-2 text-xl font-semibold text-foreground">5. Contact</h2>

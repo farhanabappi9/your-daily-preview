@@ -62,8 +62,8 @@ export const dict: Dict = {
   "product.save": { bn: "সাশ্রয়", en: "Save" },
   "product.cod": { bn: "ক্যাশ অন ডেলিভারি আছে", en: "Cash on Delivery available" },
   "product.ship": {
-    bn: "ঢাকার ভিতরে ৳ ৮০, বাইরে ৳ ১৫০ ডেলিভারি চার্জ",
-    en: "Inside Dhaka ৳ 80, Outside Dhaka ৳ 150 delivery charge",
+    bn: "ঢাকার ভিতরে ৳ ৭০, বাইরে ৳ ১৩০ ডেলিভারি চার্জ",
+    en: "Inside Dhaka ৳ 70, Outside Dhaka ৳ 130 delivery charge",
   },
   "product.return": { bn: "৭ দিনের রিটার্ন গ্যারান্টি", en: "7-day return guarantee" },
   // Checkout
