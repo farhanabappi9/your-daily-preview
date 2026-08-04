@@ -4,7 +4,7 @@ import { useState } from "react";
 import { deleteOrder, getOrder, updateOrder } from "@/lib/admin.functions";
 import { sendOrderToCourier, refreshCourierStatus } from "@/lib/courier.functions";
 import { formatBDT } from "@/lib/products";
-import { ArrowLeft, Printer, Trash2, Truck, RefreshCw } from "lucide-react";
+import { ArrowLeft, Printer, Trash2, Truck, RefreshCw, X } from "lucide-react";
 import { STATUSES } from "./admin.orders.index";
 
 export const Route = createFileRoute("/admin/orders/$id")({ component: OrderDetail });
@@ -21,6 +21,8 @@ function OrderDetail() {
   const [saving, setSaving] = useState(false);
   const [courierBusy, setCourierBusy] = useState(false);
   const [courierMsg, setCourierMsg] = useState<string | null>(null);
+  // ছবি বড় করে দেখার জন্য lightbox state
+  const [zoom, setZoom] = useState<{ src: string; alt: string } | null>(null);
 
   if (isLoading) return <p className="text-sm text-muted-foreground">লোড হচ্ছে…</p>;
   const order: any = data?.order;
@@ -108,13 +110,35 @@ function OrderDetail() {
               <tbody>
                 {order.order_items?.map((it: any) => (
                   <tr key={it.id} className="border-b last:border-0">
-                    <td className="p-3">
-                      {it.name}
+                    <td className="w-[128px] p-3">
+                      {it.image ? (
+                        <button
+                          type="button"
+                          onClick={() => setZoom({ src: it.image, alt: it.name })}
+                          title="বড় করে দেখতে ক্লিক করুন"
+                          className="block overflow-hidden rounded-md border transition hover:opacity-90"
+                        >
+                          <img
+                            src={it.image}
+                            alt={it.name}
+                            loading="lazy"
+                            decoding="async"
+                            className="h-28 w-28 object-cover"
+                          />
+                        </button>
+                      ) : (
+                        <div className="flex h-28 w-28 items-center justify-center rounded-md border bg-muted text-[11px] text-muted-foreground">
+                          No image
+                        </div>
+                      )}
+                    </td>
+                    <td className="p-3 align-middle">
+                      <div className="font-medium">{it.name}</div>
                       <div className="text-xs text-muted-foreground">
                         {formatBDT(Number(it.price))} × {it.quantity}
                       </div>
                     </td>
-                    <td className="p-3 text-right font-medium">
+                    <td className="p-3 text-right align-middle font-medium">
                       {formatBDT(Number(it.price) * it.quantity)}
                     </td>
                   </tr>
@@ -246,6 +270,33 @@ function OrderDetail() {
           </div>
         </div>
       </div>
+
+      {/* ছবি বড় করে দেখার lightbox */}
+      {zoom && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setZoom(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+        >
+          <button
+            type="button"
+            onClick={() => setZoom(null)}
+            aria-label="Close"
+            className="absolute right-4 top-4 rounded-full bg-card p-2 text-foreground shadow"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <figure onClick={(e) => e.stopPropagation()} className="max-h-full max-w-3xl">
+            <img
+              src={zoom.src}
+              alt={zoom.alt}
+              className="max-h-[80vh] w-auto rounded-lg object-contain shadow-2xl"
+            />
+            <figcaption className="mt-3 text-center text-sm text-white">{zoom.alt}</figcaption>
+          </figure>
+        </div>
+      )}
     </div>
   );
 }

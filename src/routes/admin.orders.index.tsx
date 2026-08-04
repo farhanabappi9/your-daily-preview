@@ -18,6 +18,45 @@ export const STATUSES = [
   "returned",
 ];
 
+/** Order row-এর প্রোডাক্ট ছবিগুলো (বড় thumbnail, hover করলে আরও বড় preview) */
+function OrderItemThumbs({ items }: { items: any[] }) {
+  const list = (items ?? []).filter((i) => i?.image);
+  if (list.length === 0) {
+    return (
+      <div className="flex h-16 w-16 items-center justify-center rounded-md border bg-muted text-[10px] text-muted-foreground">
+        No image
+      </div>
+    );
+  }
+  const shown = list.slice(0, 3);
+  return (
+    <div className="flex items-center gap-1.5">
+      {shown.map((it: any, idx: number) => (
+        <div key={it.id ?? idx} className="group relative">
+          <img
+            src={it.image}
+            alt={it.name}
+            loading="lazy"
+            decoding="async"
+            className="h-16 w-16 rounded-md border object-cover"
+          />
+          {/* hover preview */}
+          <div className="pointer-events-none absolute left-0 top-full z-30 hidden pt-2 group-hover:block">
+            <img
+              src={it.image}
+              alt={it.name}
+              className="h-64 w-64 rounded-lg border bg-card object-cover shadow-xl"
+            />
+          </div>
+        </div>
+      ))}
+      {list.length > shown.length && (
+        <span className="text-xs text-muted-foreground">+{list.length - shown.length}</span>
+      )}
+    </div>
+  );
+}
+
 function OrdersPage() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["admin-orders"], queryFn: () => listOrders() });
@@ -118,6 +157,7 @@ function OrdersPage() {
                   onChange={toggleAll}
                 />
               </th>
+              <th className="p-3">Product</th>
               <th className="p-3">Order</th>
               <th className="p-3">Customer</th>
               <th className="hidden p-3 sm:table-cell">Items</th>
@@ -131,7 +171,7 @@ function OrdersPage() {
           <tbody>
             {isLoading && (
               <tr>
-                <td colSpan={9} className="p-6 text-center text-muted-foreground">
+                <td colSpan={10} className="p-6 text-center text-muted-foreground">
                   লোড হচ্ছে…
                 </td>
               </tr>
@@ -144,6 +184,11 @@ function OrdersPage() {
                     checked={selected.has(o.id)}
                     onChange={() => toggleOne(o.id)}
                   />
+                </td>
+                <td className="p-3">
+                  <Link to="/admin/orders/$id" params={{ id: o.id }}>
+                    <OrderItemThumbs items={o.order_items ?? []} />
+                  </Link>
                 </td>
                 <td className="p-3">
                   <Link
@@ -193,7 +238,7 @@ function OrdersPage() {
             ))}
             {!isLoading && rows.length === 0 && (
               <tr>
-                <td colSpan={9} className="p-6 text-center text-muted-foreground">
+                <td colSpan={10} className="p-6 text-center text-muted-foreground">
                   কোনো অর্ডার পাওয়া যায়নি।
                 </td>
               </tr>
