@@ -41,6 +41,7 @@ import { Route as AdminOrdersIndexRouteImport } from './routes/admin.orders.inde
 import { Route as AdminOrdersIdRouteImport } from './routes/admin.orders.$id'
 import { Route as AdminProductsIndexRouteImport } from './routes/admin.products.index'
 import { Route as AdminProductsIdRouteImport } from './routes/admin.products.$id'
+import { Route as ApiCourierSteadfastWebhookRouteImport } from './routes/api/courier/steadfast-webhook'
 import { Route as ApiPublicImgSplatRouteImport } from './routes/api/public/img/$'
 
 const IndexRoute = IndexRouteImport.update({
@@ -203,6 +204,12 @@ const AdminProductsIdRoute = AdminProductsIdRouteImport.update({
   path: '/products/$id',
   getParentRoute: () => AdminRoute,
 } as any)
+const ApiCourierSteadfastWebhookRoute =
+  ApiCourierSteadfastWebhookRouteImport.update({
+    id: '/api/courier/steadfast-webhook',
+    path: '/api/courier/steadfast-webhook',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicImgSplatRoute = ApiPublicImgSplatRouteImport.update({
   id: '/api/public/img/$',
   path: '/api/public/img/$',
@@ -240,6 +247,7 @@ export interface FileRoutesByFullPath {
   '/admin/invoice/$id': typeof AdminInvoiceIdRoute
   '/admin/orders/$id': typeof AdminOrdersIdRoute
   '/admin/products/$id': typeof AdminProductsIdRoute
+  '/api/courier/steadfast-webhook': typeof ApiCourierSteadfastWebhookRoute
   '/admin/orders/': typeof AdminOrdersIndexRoute
   '/admin/products/': typeof AdminProductsIndexRoute
   '/api/public/img/$': typeof ApiPublicImgSplatRoute
@@ -274,6 +282,7 @@ export interface FileRoutesByTo {
   '/admin/invoice/$id': typeof AdminInvoiceIdRoute
   '/admin/orders/$id': typeof AdminOrdersIdRoute
   '/admin/products/$id': typeof AdminProductsIdRoute
+  '/api/courier/steadfast-webhook': typeof ApiCourierSteadfastWebhookRoute
   '/admin/orders': typeof AdminOrdersIndexRoute
   '/admin/products': typeof AdminProductsIndexRoute
   '/api/public/img/$': typeof ApiPublicImgSplatRoute
@@ -310,6 +319,7 @@ export interface FileRoutesById {
   '/admin/invoice/$id': typeof AdminInvoiceIdRoute
   '/admin/orders/$id': typeof AdminOrdersIdRoute
   '/admin/products/$id': typeof AdminProductsIdRoute
+  '/api/courier/steadfast-webhook': typeof ApiCourierSteadfastWebhookRoute
   '/admin/orders/': typeof AdminOrdersIndexRoute
   '/admin/products/': typeof AdminProductsIndexRoute
   '/api/public/img/$': typeof ApiPublicImgSplatRoute
@@ -347,6 +357,7 @@ export interface FileRouteTypes {
     | '/admin/invoice/$id'
     | '/admin/orders/$id'
     | '/admin/products/$id'
+    | '/api/courier/steadfast-webhook'
     | '/admin/orders/'
     | '/admin/products/'
     | '/api/public/img/$'
@@ -381,6 +392,7 @@ export interface FileRouteTypes {
     | '/admin/invoice/$id'
     | '/admin/orders/$id'
     | '/admin/products/$id'
+    | '/api/courier/steadfast-webhook'
     | '/admin/orders'
     | '/admin/products'
     | '/api/public/img/$'
@@ -416,6 +428,7 @@ export interface FileRouteTypes {
     | '/admin/invoice/$id'
     | '/admin/orders/$id'
     | '/admin/products/$id'
+    | '/api/courier/steadfast-webhook'
     | '/admin/orders/'
     | '/admin/products/'
     | '/api/public/img/$'
@@ -439,6 +452,7 @@ export interface RootRouteChildren {
   CategorySlugRoute: typeof CategorySlugRoute
   InvoiceIdRoute: typeof InvoiceIdRoute
   ProductSlugRoute: typeof ProductSlugRoute
+  ApiCourierSteadfastWebhookRoute: typeof ApiCourierSteadfastWebhookRoute
   ApiPublicImgSplatRoute: typeof ApiPublicImgSplatRoute
 }
 
@@ -668,6 +682,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminProductsIdRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/api/courier/steadfast-webhook': {
+      id: '/api/courier/steadfast-webhook'
+      path: '/api/courier/steadfast-webhook'
+      fullPath: '/api/courier/steadfast-webhook'
+      preLoaderRoute: typeof ApiCourierSteadfastWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/img/$': {
       id: '/api/public/img/$'
       path: '/api/public/img/$'
@@ -734,6 +755,7 @@ const rootRouteChildren: RootRouteChildren = {
   CategorySlugRoute: CategorySlugRoute,
   InvoiceIdRoute: InvoiceIdRoute,
   ProductSlugRoute: ProductSlugRoute,
+  ApiCourierSteadfastWebhookRoute: ApiCourierSteadfastWebhookRoute,
   ApiPublicImgSplatRoute: ApiPublicImgSplatRoute,
 }
 export const routeTree = rootRouteImport

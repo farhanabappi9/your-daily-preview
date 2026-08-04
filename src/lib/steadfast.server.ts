@@ -6,32 +6,57 @@ function steadfastCredentials(): { apiKey: string; secretKey: string } {
   const apiKey = process.env.STEADFAST_API_KEY;
   const secretKey = process.env.STEADFAST_SECRET_KEY;
   if (!apiKey || !secretKey) {
+    // NOTE: only report the *names* of the missing env vars — never the
+    // key values themselves (an earlier version of this file accidentally
+    // hardcoded the real key/secret here, which leaked them into any error
+    // message / log this function ever threw).
     const missing = [
-      ...(!apiKey ? ["nikqu70tfoeia5kervp4sq5wdsepsaa4"] : []),
-      ...(!secretKey ? ["am9azoyu7wyuevblgbk0vyys"] : []),
+      ...(!apiKey ? ["STEADFAST_API_KEY"] : []),
+      ...(!secretKey ? ["STEADFAST_SECRET_KEY"] : []),
     ];
-    throw new Error(`Missing Steadfast credential(s): ${missing.join(", ")}.`);
+    throw new Error(
+      `Missing Steadfast credential(s): ${missing.join(", ")}. Set them as runtime secrets ` +
+        `(e.g. \`npx wrangler secret put STEADFAST_API_KEY\`) and redeploy.`,
+    );
   }
   return { apiKey, secretKey };
 }
 
 async function steadfastFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const { apiKey, secretKey } = steadfastCredentials();
-  const res = await fetch(`${STEADFAST_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      "Api-Key": apiKey,
-      "Secret-Key": secretKey,
-      ...(init?.headers ?? {}),
-    },
-  });
+  const url = `${STEADFAST_BASE_URL}${path}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        "Api-Key": apiKey,
+        "Secret-Key": secretKey,
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (networkError: any) {
+    // fetch() itself threw — DNS/TLS/connection failure, not an HTTP error.
+    throw new Error(
+      `Could not reach Steadfast (${url}): ${networkError?.message ?? networkError}`,
+    );
+  }
   const text = await res.text();
   let body: any;
   try {
     body = text ? JSON.parse(text) : {};
   } catch {
-    throw new Error(`Steadfast returned non-JSON response (HTTP ${res.status}): ${text.slice(0, 300)}`);
+    const looksLikeHtml = /<\s*html/i.test(text);
+    const hint = looksLikeHtml
+      ? " This looks like an HTML page rather than a Steadfast API response — double check the " +
+        "request path/method against Steadfast's current API docs, and confirm this endpoint is " +
+        "enabled for your merchant account."
+      : "";
+    throw new Error(
+      `Steadfast returned non-JSON response (HTTP ${res.status}) from ${url}: ` +
+        `${text.slice(0, 300)}${hint}`,
+    );
   }
   if (!res.ok) {
     const message = body?.message || body?.errors || `Steadfast API error (HTTP ${res.status})`;
