@@ -1,9 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { listOrders } from "@/lib/admin.functions";
+import { bulkSendOrdersToCourier } from "@/lib/courier.functions";
 import { formatBDT } from "@/lib/products";
-import { Printer } from "lucide-react";
+import { Printer, Truck } from "lucide-react";
 
 export const Route = createFileRoute("/admin/orders/")({ component: OrdersPage });
 
@@ -18,9 +19,13 @@ export const STATUSES = [
 ];
 
 function OrdersPage() {
+  const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["admin-orders"], queryFn: () => listOrders() });
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMsg, setBulkMsg] = useState<string | null>(null);
 
   const rows = useMemo(() => {
     const all = (data ?? []) as any[];
@@ -35,6 +40,37 @@ function OrdersPage() {
       return okStatus && okQ;
     });
   }, [data, q, status]);
+
+  const toggleOne = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    setSelected((prev) => (prev.size === rows.length ? new Set() : new Set(rows.map((r) => r.id))));
+  };
+
+  const bulkSend = async () => {
+    if (selected.size === 0) return;
+    setBulkBusy(true);
+    setBulkMsg(null);
+    try {
+      const res = await bulkSendOrdersToCourier({ data: { ids: Array.from(selected) } });
+      setBulkMsg(
+        `পাঠানো হয়েছে: ${res.sent}, ব্যর্থ: ${res.failed}, আগেই পাঠানো ছিল: ${res.alreadySent}`,
+      );
+      setSelected(new Set());
+      await qc.invalidateQueries({ queryKey: ["admin-orders"] });
+    } catch (e: any) {
+      setBulkMsg(String(e?.message ?? e));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -59,12 +95,29 @@ function OrdersPage() {
             </option>
           ))}
         </select>
+        {selected.size > 0 && (
+          <button
+            onClick={bulkSend}
+            disabled={bulkBusy}
+            className="flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+          >
+            <Truck className="h-4 w-4" /> Steadfast-এ পাঠান ({selected.size})
+          </button>
+        )}
       </div>
+      {bulkMsg && <p className="text-xs text-muted-foreground">{bulkMsg}</p>}
 
       <div className="overflow-x-auto rounded-lg border bg-card">
         <table className="w-full text-sm">
           <thead className="bg-muted text-left text-xs uppercase text-muted-foreground">
             <tr>
+              <th className="p-3">
+                <input
+                  type="checkbox"
+                  checked={rows.length > 0 && selected.size === rows.length}
+                  onChange={toggleAll}
+                />
+              </th>
               <th className="p-3">Order</th>
               <th className="p-3">Customer</th>
               <th className="hidden p-3 sm:table-cell">Items</th>
@@ -73,19 +126,25 @@ function OrdersPage() {
               <th className="p-3">Status</th>
               <th className="hidden p-3 md:table-cell">Date</th>
               <th className="p-3 text-right">Invoice</th>
-
             </tr>
           </thead>
           <tbody>
             {isLoading && (
               <tr>
-                <td colSpan={8} className="p-6 text-center text-muted-foreground">
+                <td colSpan={9} className="p-6 text-center text-muted-foreground">
                   লোড হচ্ছে…
                 </td>
               </tr>
             )}
             {rows.map((o) => (
               <tr key={o.id} className="border-t hover:bg-muted/40">
+                <td className="p-3">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(o.id)}
+                    onChange={() => toggleOne(o.id)}
+                  />
+                </td>
                 <td className="p-3">
                   <Link
                     to="/admin/orders/$id"
@@ -94,6 +153,11 @@ function OrdersPage() {
                   >
                     {o.order_no}
                   </Link>
+                  {o.courier_consignment_id && (
+                    <div className="text-[11px] text-muted-foreground">
+                      📦 {o.courier_status ?? "pending"}
+                    </div>
+                  )}
                 </td>
                 <td className="p-3">
                   <span className="line-clamp-1">{o.customer_name}</span>
@@ -125,12 +189,11 @@ function OrdersPage() {
                     <Printer className="h-3.5 w-3.5" /> Invoice
                   </Link>
                 </td>
-
               </tr>
             ))}
             {!isLoading && rows.length === 0 && (
               <tr>
-                <td colSpan={8} className="p-6 text-center text-muted-foreground">
+                <td colSpan={9} className="p-6 text-center text-muted-foreground">
                   কোনো অর্ডার পাওয়া যায়নি।
                 </td>
               </tr>

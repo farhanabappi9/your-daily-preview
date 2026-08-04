@@ -2,8 +2,9 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { deleteOrder, getOrder, updateOrder } from "@/lib/admin.functions";
+import { sendOrderToCourier, refreshCourierStatus } from "@/lib/courier.functions";
 import { formatBDT } from "@/lib/products";
-import { ArrowLeft, Printer, Trash2 } from "lucide-react";
+import { ArrowLeft, Printer, Trash2, Truck, RefreshCw } from "lucide-react";
 import { STATUSES } from "./admin.orders.index";
 
 export const Route = createFileRoute("/admin/orders/$id")({ component: OrderDetail });
@@ -18,6 +19,8 @@ function OrderDetail() {
   });
   const [note, setNote] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [courierBusy, setCourierBusy] = useState(false);
+  const [courierMsg, setCourierMsg] = useState<string | null>(null);
 
   if (isLoading) return <p className="text-sm text-muted-foreground">লোড হচ্ছে…</p>;
   const order: any = data?.order;
@@ -32,6 +35,34 @@ function OrderDetail() {
       await qc.invalidateQueries({ queryKey: ["admin-dashboard"] });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const sendToCourier = async () => {
+    setCourierBusy(true);
+    setCourierMsg(null);
+    try {
+      const res = await sendOrderToCourier({ data: { id } });
+      setCourierMsg(res.ok ? "Steadfast-এ পাঠানো হয়েছে।" : res.error);
+      await qc.invalidateQueries({ queryKey: ["admin-order", id] });
+    } catch (e: any) {
+      setCourierMsg(String(e?.message ?? e));
+    } finally {
+      setCourierBusy(false);
+    }
+  };
+
+  const refreshStatus = async () => {
+    setCourierBusy(true);
+    setCourierMsg(null);
+    try {
+      const res = await refreshCourierStatus({ data: { id } });
+      setCourierMsg(`Delivery status: ${res.delivery_status}`);
+      await qc.invalidateQueries({ queryKey: ["admin-order", id] });
+    } catch (e: any) {
+      setCourierMsg(String(e?.message ?? e));
+    } finally {
+      setCourierBusy(false);
     }
   };
 
@@ -122,6 +153,49 @@ function OrderDetail() {
             <p className="text-muted-foreground">{order.phone}</p>
             <p className="mt-2 whitespace-pre-line text-muted-foreground">{order.address}</p>
             {order.note && <p className="mt-2 rounded bg-muted p-2 text-xs">📝 {order.note}</p>}
+          </div>
+
+          <div className="space-y-3 rounded-lg border bg-card p-4 text-sm">
+            <h2 className="font-semibold">Courier — Steadfast</h2>
+            {order.courier_consignment_id ? (
+              <div className="space-y-1 text-xs">
+                <p>
+                  <span className="text-muted-foreground">Consignment ID:</span>{" "}
+                  {order.courier_consignment_id}
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Tracking code:</span>{" "}
+                  {order.courier_tracking_code}
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Status:</span>{" "}
+                  <span className="rounded-full bg-muted px-2 py-0.5">
+                    {order.courier_status ?? "pending"}
+                  </span>
+                </p>
+                <button
+                  onClick={refreshStatus}
+                  disabled={courierBusy}
+                  className="mt-2 flex items-center gap-2 rounded-md border px-3 py-2 text-xs font-medium disabled:opacity-50"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" /> Status Refresh করুন
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={sendToCourier}
+                disabled={courierBusy}
+                className="flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+              >
+                <Truck className="h-4 w-4" /> Send to Steadfast
+              </button>
+            )}
+            {order.courier_error && !order.courier_consignment_id && (
+              <p className="rounded bg-destructive/10 p-2 text-xs text-destructive">
+                {order.courier_error}
+              </p>
+            )}
+            {courierMsg && <p className="text-xs text-muted-foreground">{courierMsg}</p>}
           </div>
 
           <div className="space-y-3 rounded-lg border bg-card p-4 text-sm">
