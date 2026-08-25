@@ -21,6 +21,7 @@ import {
   FileText,
   LineChart,
   ShieldCheck,
+  Music2,
 
 } from "lucide-react";
 
@@ -48,6 +49,7 @@ const NAV: { to: any; label: string; icon: any; exact?: boolean }[] = [
   { to: "/admin/reports", label: "Reports", icon: LineChart },
   { to: "/admin/content", label: "Content & Invoice", icon: FileText },
   { to: "/admin/users", label: "Users & Roles", icon: ShieldCheck },
+  { to: "/admin/tiktok-pixel", label: "TikTok Pixel", icon: Music2 },
   { to: "/admin/settings", label: "Settings", icon: SettingsIcon },
 
 ];

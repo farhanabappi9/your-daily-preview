@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import {
   Outlet,
   Link,
@@ -23,6 +23,13 @@ import {
   trackPageView,
   trackViewContent,
 } from "../lib/pixel";
+import {
+  initTikTokPixel,
+  ttInitiateCheckout,
+  ttPageView,
+  ttViewContent,
+} from "../lib/tiktok-pixel";
+import { getStorefront } from "../lib/shop.functions";
 
 function NotFoundComponent() {
   return (
@@ -186,6 +193,7 @@ function PixelRouteTracker() {
       firstRender.current = false;
     } else {
       trackPageView();
+      ttPageView();
     }
 
     const productMatch = pathname.match(/^\/product\/(.+)$/);
@@ -193,6 +201,7 @@ function PixelRouteTracker() {
       const product = getBySlug(decodeURIComponent(productMatch[1]));
       if (product) {
         trackViewContent({ slug: product.slug, name: product.name, price: product.price });
+        ttViewContent({ slug: product.slug, name: product.name, price: product.price });
       }
       return;
     }
@@ -202,11 +211,37 @@ function PixelRouteTracker() {
         items: items.map((i) => ({ slug: i.slug, quantity: i.quantity })),
         value: subtotal,
       });
+      ttInitiateCheckout({
+        items: items.map((i) => ({ slug: i.slug, quantity: i.quantity })),
+        value: subtotal,
+      });
     }
     // `items`/`subtotal` are intentionally excluded: the checkout event should
     // fire once when the page opens, not again on every cart tweak.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname, getBySlug]);
+
+  return null;
+}
+
+/**
+ * TikTok Pixel loader.
+ *
+ * Pixel ID কোডে নেই — Admin → TikTok Pixel পেজে সেভ করা ID `settings` টেবিল
+ * থেকে storefront query-র সাথে আসে। ID খালি বা toggle off থাকলে TikTok-এর
+ * কোনো script-ই লোড হয় না।
+ */
+function TikTokPixelLoader() {
+  const { data } = useQuery({ queryKey: ["storefront"], queryFn: () => getStorefront() });
+  const pixelId = (data?.settings as { tiktokPixelId?: string } | undefined)?.tiktokPixelId;
+  const enabled = (data?.settings as { tiktokPixelEnabled?: boolean } | undefined)
+    ?.tiktokPixelEnabled;
+
+  useEffect(() => {
+    if (!data?.settings) return;
+    if (enabled === false) return;
+    initTikTokPixel(pixelId);
+  }, [data?.settings, pixelId, enabled]);
 
   return null;
 }
@@ -222,6 +257,7 @@ function RootComponent() {
             <Outlet />
             <ThemeCustomizer />
             <PixelRouteTracker />
+            <TikTokPixelLoader />
           </I18nProvider>
         </CartProvider>
       </ProductsProvider>

@@ -160,6 +160,9 @@ export type ShopSettings = {
   address: string;
   facebook: string;
   instagram: string;
+  /** TikTok Pixel — admin panel থেকে সেট হয়, কোডে hardcode নেই */
+  tiktokPixelId?: string;
+  tiktokPixelEnabled?: boolean;
   shippingInside: number;
   shippingOutside: number;
   freeShippingOver: number;
@@ -200,6 +203,8 @@ export const DEFAULT_SETTINGS: ShopSettings = {
   address: "",
   facebook: "",
   instagram: "",
+  tiktokPixelId: "",
+  tiktokPixelEnabled: true,
   shippingInside: 70,
   shippingOutside: 130,
   freeShippingOver: 0,

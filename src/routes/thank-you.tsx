@@ -8,6 +8,7 @@ import { getOrderReceipt } from "@/lib/shop.functions";
 import { useI18n } from "@/lib/i18n";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { trackPurchase } from "@/lib/pixel";
+import { ttCompletePayment } from "@/lib/tiktok-pixel";
 import { useEffect, useRef } from "react";
 
 type SavedOrder = {
@@ -82,6 +83,13 @@ function ThankYou() {
     if (!data?.orderId || reportedOrder.current === data.orderId) return;
     reportedOrder.current = data.orderId;
     trackPurchase({
+      orderNo: data.orderId,
+      value: data.total,
+      items: data.items.map((i) => ({ name: i.name, quantity: i.quantity })),
+    });
+    // TikTok-এ purchase = CompletePayment; একই orderId event_id হিসেবে যায় তাই
+    // refresh করলে ডাবল sale count হয় না।
+    ttCompletePayment({
       orderNo: data.orderId,
       value: data.total,
       items: data.items.map((i) => ({ name: i.name, quantity: i.quantity })),
