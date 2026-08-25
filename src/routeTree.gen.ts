@@ -30,6 +30,7 @@ import { Route as AdminCustomersRouteImport } from './routes/admin.customers'
 import { Route as AdminInventoryRouteImport } from './routes/admin.inventory'
 import { Route as AdminReportsRouteImport } from './routes/admin.reports'
 import { Route as AdminSettingsRouteImport } from './routes/admin.settings'
+import { Route as AdminTiktokPixelRouteImport } from './routes/admin.tiktok-pixel'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
@@ -149,6 +150,11 @@ const AdminSettingsRoute = AdminSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminTiktokPixelRoute = AdminTiktokPixelRouteImport.update({
+  id: '/tiktok-pixel',
+  path: '/tiktok-pixel',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminUsersRoute = AdminUsersRouteImport.update({
   id: '/users',
   path: '/users',
@@ -237,6 +243,7 @@ export interface FileRoutesByFullPath {
   '/admin/inventory': typeof AdminInventoryRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/settings': typeof AdminSettingsRoute
+  '/admin/tiktok-pixel': typeof AdminTiktokPixelRoute
   '/admin/users': typeof AdminUsersRoute
   '/api/health': typeof ApiHealthRoute
   '/auth/callback': typeof AuthCallbackRoute
@@ -272,6 +279,7 @@ export interface FileRoutesByTo {
   '/admin/inventory': typeof AdminInventoryRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/settings': typeof AdminSettingsRoute
+  '/admin/tiktok-pixel': typeof AdminTiktokPixelRoute
   '/admin/users': typeof AdminUsersRoute
   '/api/health': typeof ApiHealthRoute
   '/auth/callback': typeof AuthCallbackRoute
@@ -309,6 +317,7 @@ export interface FileRoutesById {
   '/admin/inventory': typeof AdminInventoryRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/settings': typeof AdminSettingsRoute
+  '/admin/tiktok-pixel': typeof AdminTiktokPixelRoute
   '/admin/users': typeof AdminUsersRoute
   '/api/health': typeof ApiHealthRoute
   '/auth/callback': typeof AuthCallbackRoute
@@ -347,6 +356,7 @@ export interface FileRouteTypes {
     | '/admin/inventory'
     | '/admin/reports'
     | '/admin/settings'
+    | '/admin/tiktok-pixel'
     | '/admin/users'
     | '/api/health'
     | '/auth/callback'
@@ -382,6 +392,7 @@ export interface FileRouteTypes {
     | '/admin/inventory'
     | '/admin/reports'
     | '/admin/settings'
+    | '/admin/tiktok-pixel'
     | '/admin/users'
     | '/api/health'
     | '/auth/callback'
@@ -418,6 +429,7 @@ export interface FileRouteTypes {
     | '/admin/inventory'
     | '/admin/reports'
     | '/admin/settings'
+    | '/admin/tiktok-pixel'
     | '/admin/users'
     | '/api/health'
     | '/auth/callback'
@@ -605,6 +617,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminSettingsRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/tiktok-pixel': {
+      id: '/admin/tiktok-pixel'
+      path: '/tiktok-pixel'
+      fullPath: '/admin/tiktok-pixel'
+      preLoaderRoute: typeof AdminTiktokPixelRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/users': {
       id: '/admin/users'
       path: '/users'
@@ -708,6 +727,7 @@ interface AdminRouteChildren {
   AdminInventoryRoute: typeof AdminInventoryRoute
   AdminReportsRoute: typeof AdminReportsRoute
   AdminSettingsRoute: typeof AdminSettingsRoute
+  AdminTiktokPixelRoute: typeof AdminTiktokPixelRoute
   AdminUsersRoute: typeof AdminUsersRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminInvoiceIdRoute: typeof AdminInvoiceIdRoute
@@ -726,6 +746,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminInventoryRoute: AdminInventoryRoute,
   AdminReportsRoute: AdminReportsRoute,
   AdminSettingsRoute: AdminSettingsRoute,
+  AdminTiktokPixelRoute: AdminTiktokPixelRoute,
   AdminUsersRoute: AdminUsersRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminInvoiceIdRoute: AdminInvoiceIdRoute,
