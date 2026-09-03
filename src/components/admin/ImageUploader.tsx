@@ -25,13 +25,21 @@ export function ImageUploader({
     setError("");
     const next = [...images];
     try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
       for (const file of Array.from(files).slice(0, max - images.length)) {
-        const ext = file.name.split(".").pop()?.toLowerCase() ?? "jpg";
-        const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-        const { error: upErr } = await supabase.storage
-          .from("product-images")
-          .upload(path, file, { cacheControl: "31536000", upsert: false });
-        if (upErr) throw upErr;
+        const form = new FormData();
+        form.append("file", file);
+        const res = await fetch("/api/public/img/upload", {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: form,
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}) as { error?: string });
+          throw new Error(body.error ?? `Upload failed (${res.status})`);
+        }
+        const { path } = (await res.json()) as { path: string };
         next.push(imageUrlFromPath(path));
       }
       onChange(next);
