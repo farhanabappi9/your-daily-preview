@@ -37,10 +37,7 @@ bucket_name = "product-images"
 #
 # Remove an entry once the old project is deleted — a dead origin just costs
 # a failed request.
-#
-# Example:
-# LEGACY_IMAGE_ORIGINS = "https://ldsnvxmaghkeinfjkpqz.supabase.co,https://xvxmydbhhpxiemmpahzo.supabase.co"
-LEGACY_IMAGE_ORIGINS = ""
+LEGACY_IMAGE_ORIGINS = "https://ldsnvxmaghkeinfjkpqz.supabase.co,https://xvxmydbhhpxiemmpahzo.supabase.co"
 
 # The Lovable preview host, if it is still up. Used only for the bundled
 # catalog art (/__l5e/assets-v1/...) — logo, hero cover, category tiles and
