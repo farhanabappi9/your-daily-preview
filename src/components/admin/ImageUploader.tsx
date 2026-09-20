@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Loader2, Upload, X } from "lucide-react";
+import { compressImage } from "@/lib/compress-image";
 
 export function imageUrlFromPath(path: string) {
   return `/api/public/img/${path}`;
@@ -27,7 +28,8 @@ export function ImageUploader({
     try {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
-      for (const file of Array.from(files).slice(0, max - images.length)) {
+      for (const rawFile of Array.from(files).slice(0, max - images.length)) {
+        const file = await compressImage(rawFile);
         const form = new FormData();
         form.append("file", file);
         const res = await fetch("/api/public/img/upload", {
