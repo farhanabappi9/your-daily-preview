@@ -2,6 +2,20 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
+import {
+  BUCKET,
+  IMG_PREFIX,
+  IMG_UPLOAD_PATH,
+  LEGACY_ASSET_PREFIX,
+  currentSupabaseUrl,
+  guessContentType,
+  objectKeyFromPath,
+  placeholderResponse,
+  resolveImage,
+  serviceRoleKey,
+} from "./lib/image-serving";
+import { imageStatusResponse } from "./lib/image-diagnostics";
+import { getProductImagesBucket, getWorkerEnv } from "./lib/worker-runtime";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -19,108 +33,112 @@ async function getServerEntry(): Promise<ServerEntry> {
 }
 
 /* ------------------------------------------------------------------ *
- * Legacy asset compatibility
+ * Images
  *
- * Every image URL in this project — the rows in `products.images` and
- * `categories.image`, the bundled catalog in src/lib/products.ts, the
- * category tiles, and the hero cover — points at
- *   /__l5e/assets-v1/<asset-id>/<filename>
+ * Two URL shapes reach us:
  *
- * That path is served by Lovable's own asset host. On a self-hosted
- * Cloudflare Worker nothing answers it, so every image 404s.
+ *   /__l5e/assets-v1/<asset-id>/<file>  — the bundled catalog art (logo, hero
+ *                                         cover, category tiles, the seeded
+ *                                         product photos). Minted by Lovable's
+ *                                         asset host, which nothing answers on
+ *                                         a self-hosted Worker.
+ *   /api/public/img/<key>               — everything uploaded from the admin
+ *                                         panel.
  *
- * Rather than rewriting ~120 database rows plus the bundled code, we make
- * the path work here: the asset id is ignored and the file is looked up by
- * filename in the public `product-images` bucket under `catalog/`.
- * Run scripts/migrate-assets-to-supabase.mjs once to populate that folder.
+ * Both are normalised to a single object key and resolved by
+ * src/lib/image-serving.ts, which tries R2 -> Supabase -> old Supabase
+ * projects -> Lovable, and backfills R2 with whatever it finds.
+ *
+ * NOTE: `env` and `ctx` below are undefined in production — Nitro calls this
+ * module's fetch with the Request only. They are still accepted so the same
+ * file works when it *is* called with all three, and every consumer goes
+ * through getWorkerEnv(), which knows where Nitro really keeps the bindings.
  * ------------------------------------------------------------------ */
 
-const LEGACY_ASSET_PREFIX = "/__l5e/assets-v1/";
-const ASSET_FOLDER = "catalog";
-const BUCKET = "product-images";
+async function handleImageUpload(request: Request, env: unknown): Promise<Response> {
+  const workerEnv = getWorkerEnv(env, request);
 
-function supabaseBaseUrl(): string | undefined {
-  let baked: string | undefined;
-  try {
-    baked = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-  } catch {
-    /* import.meta.env unavailable in this runtime */
+  if (!(await requireAdminToken(request, workerEnv))) {
+    return json({ error: "Unauthorized" }, 401);
   }
-  const url = baked || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  return url ? url.replace(/\/$/, "") : undefined;
-}
 
-/* ------------------------------------------------------------------ *
- * Product images: R2-first, Supabase-fallback (added 2026-09-03)
- *
- * Why this lives here and not in src/routes/api/public/img/$.ts:
- * the R2 binding only exists on the raw Cloudflare `env` object passed
- * into this file's top-level `fetch(request, env, ctx)`. TanStack's file
- * routes don't get that `env` threaded through, so any code that needs
- * the binding has to run at this level — same reason the legacy-asset
- * handler above lives here instead of in a route file.
- *
- * Behaviour:
- *   GET  /api/public/img/<path>   → R2 first; on miss, Supabase public
- *                                    URL as a fallback for images that
- *                                    haven't been migrated yet (and the
- *                                    fallback result is written into R2
- *                                    in the background, so it only ever
- *                                    has to come from Supabase once).
- *                                    Also cached at Cloudflare's edge.
- *   POST /api/public/img/upload   → admin-only, streams the upload
- *                                    straight into R2. Requires a
- *                                    Supabase Bearer token (checked the
- *                                    same way requireSupabaseAuth does).
- *
- * One-time setup (see the deploy notes) before this works:
- *   npx wrangler r2 bucket create product-images
- * and the [[r2_buckets]] binding in wrangler.toml.
- * ------------------------------------------------------------------ */
+  let file: File;
+  try {
+    const form = await request.formData();
+    const candidate = form.get("file");
+    if (!(candidate instanceof File)) return json({ error: "No file provided" }, 400);
+    file = candidate;
+  } catch (error) {
+    console.error("[img] could not read upload form", error);
+    return json({ error: "Upload failed" }, 400);
+  }
 
-type R2Bucket = {
-  get: (key: string) => Promise<{ body: ReadableStream; httpMetadata?: { contentType?: string } } | null>;
-  put: (
-    key: string,
-    value: ArrayBuffer | ReadableStream | Uint8Array,
-    options?: { httpMetadata?: { contentType?: string } },
-  ) => Promise<unknown>;
-};
+  const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+  const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const contentType = file.type || guessContentType(key);
+  const bytes = await file.arrayBuffer();
 
-type WorkerEnv = {
-  PRODUCT_IMAGES?: R2Bucket;
-};
+  // 1. R2 — the intended destination.
+  const bucket = getProductImagesBucket(env, request);
+  if (bucket) {
+    try {
+      await bucket.put(key, bytes, { httpMetadata: { contentType } });
+      return json({ path: key, storedIn: "r2" });
+    } catch (error) {
+      console.error("[img] R2 upload failed, falling back to Supabase", error);
+    }
+  }
 
-type WorkerCtx = {
-  waitUntil?: (promise: Promise<unknown>) => void;
-};
+  // 2. Supabase Storage — so uploading still works before R2 is set up, and
+  //    in local dev where there is no binding at all.
+  const base = currentSupabaseUrl(workerEnv);
+  const key2 = serviceRoleKey(workerEnv);
+  if (base && key2) {
+    try {
+      const res = await fetch(`${base}/storage/v1/object/${BUCKET}/${encodeURIComponent(key)}`, {
+        method: "POST",
+        headers: {
+          apikey: key2,
+          Authorization: `Bearer ${key2}`,
+          "content-type": contentType,
+          "cache-control": "31536000",
+        },
+        body: bytes,
+      });
+      if (res.ok) return json({ path: key, storedIn: "supabase" });
+      console.error("[img] Supabase upload failed", res.status, await res.text().catch(() => ""));
+    } catch (error) {
+      console.error("[img] Supabase upload threw", error);
+    }
+  }
 
-const IMG_PREFIX = "/api/public/img/";
-const IMG_UPLOAD_PATH = "/api/public/img/upload";
-const IMG_CACHE_HEADERS = {
-  "cache-control": "public, max-age=31536000, immutable",
-};
-
-function getEdgeCache(): Cache | undefined {
-  const c = (globalThis as unknown as { caches?: { default?: Cache } }).caches;
-  return c?.default;
+  return json(
+    {
+      error:
+        "Upload failed: neither the R2 binding (PRODUCT_IMAGES) nor Supabase Storage accepted the file. Check /api/img-status.",
+    },
+    500,
+  );
 }
 
 /** Same Bearer-token check as requireSupabaseAuth, without the TanStack middleware wrapper. */
-async function requireAdminToken(request: Request): Promise<boolean> {
+async function requireAdminToken(
+  request: Request,
+  workerEnv: ReturnType<typeof getWorkerEnv>,
+): Promise<boolean> {
   const authHeader = request.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) return false;
   const token = authHeader.slice("Bearer ".length);
   if (!token || token.split(".").length !== 3) return false;
 
-  const base = supabaseBaseUrl();
+  const base = currentSupabaseUrl(workerEnv);
   let key: string | undefined;
   try {
     key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
   } catch {
     /* import.meta.env unavailable in this runtime */
   }
-  key = key || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  key = key || workerEnv.SUPABASE_PUBLISHABLE_KEY || workerEnv.VITE_SUPABASE_PUBLISHABLE_KEY;
   if (!base || !key) return false;
 
   try {
@@ -133,146 +151,16 @@ async function requireAdminToken(request: Request): Promise<boolean> {
   }
 }
 
-async function serveProductImage(pathname: string, env: WorkerEnv, ctx: WorkerCtx): Promise<Response> {
-  const path = pathname.slice(IMG_PREFIX.length);
-  if (!path || path.includes("..")) return new Response("Not found", { status: 404 });
-
-  const cache = getEdgeCache();
-  const cacheKey = new Request(new URL(pathname, "https://cache.local").toString());
-  if (cache) {
-    const cached = await cache.match(cacheKey);
-    if (cached) return cached;
-  }
-
-  const remember = (response: Response) => {
-    if (cache) ctx.waitUntil?.(cache.put(cacheKey, response.clone()));
-  };
-
-  // 1. R2 — the new home for images.
-  if (env.PRODUCT_IMAGES) {
-    try {
-      const obj = await env.PRODUCT_IMAGES.get(path);
-      if (obj) {
-        const response = new Response(obj.body, {
-          status: 200,
-          headers: { "content-type": obj.httpMetadata?.contentType ?? "image/jpeg", ...IMG_CACHE_HEADERS },
-        });
-        remember(response);
-        return response;
-      }
-    } catch (error) {
-      console.error("[img] R2 get failed for", path, error);
-    }
-  }
-
-  // 2. Supabase public storage — fallback for images not yet migrated.
-  const base = supabaseBaseUrl();
-  if (base) {
-    try {
-      const upstream = await fetch(
-        `${base}/storage/v1/object/public/${BUCKET}/${path.split("/").map(encodeURIComponent).join("/")}`,
-      );
-      if (upstream.ok && upstream.body) {
-        const contentType = upstream.headers.get("content-type") ?? "image/jpeg";
-        const bytes = await upstream.arrayBuffer();
-        const response = new Response(bytes, {
-          status: 200,
-          headers: { "content-type": contentType, ...IMG_CACHE_HEADERS },
-        });
-        remember(response);
-        // Lazy backfill: copy this image into R2 in the background so the
-        // *next* request for it never has to touch Supabase again.
-        if (env.PRODUCT_IMAGES) {
-          ctx.waitUntil?.(
-            env.PRODUCT_IMAGES.put(path, bytes, { httpMetadata: { contentType } }).catch((error: unknown) =>
-              console.error("[img] R2 backfill failed for", path, error),
-            ),
-          );
-        }
-        return response;
-      }
-    } catch (error) {
-      console.error("[img] Supabase fallback fetch failed for", path, error);
-    }
-  }
-
-  return new Response("Not found", { status: 404 });
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
-async function handleImageUpload(request: Request, env: WorkerEnv): Promise<Response> {
-  if (!env.PRODUCT_IMAGES) {
-    return new Response(JSON.stringify({ error: "R2 bucket not configured" }), {
-      status: 500,
-      headers: { "content-type": "application/json" },
-    });
-  }
-  if (!(await requireAdminToken(request))) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { "content-type": "application/json" },
-    });
-  }
-
-  try {
-    const form = await request.formData();
-    const file = form.get("file");
-    if (!(file instanceof File)) {
-      return new Response(JSON.stringify({ error: "No file provided" }), {
-        status: 400,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
-    const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    const bytes = await file.arrayBuffer();
-    await env.PRODUCT_IMAGES.put(path, bytes, {
-      httpMetadata: { contentType: file.type || "image/jpeg" },
-    });
-    return new Response(JSON.stringify({ path }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  } catch (error) {
-    console.error("[img] upload failed", error);
-    return new Response(JSON.stringify({ error: "Upload failed" }), {
-      status: 500,
-      headers: { "content-type": "application/json" },
-    });
-  }
-}
-
-async function serveLegacyAsset(pathname: string): Promise<Response> {
-  const filename = decodeURIComponent(pathname.split("/").pop() ?? "");
-  if (!filename || filename.includes("..") || filename.includes("/")) {
-    return new Response("Not found", { status: 404 });
-  }
-
-  const base = supabaseBaseUrl();
-  if (!base) {
-    console.error("[assets] SUPABASE_URL is not configured — cannot serve", pathname);
-    return new Response("Storage not configured", { status: 500 });
-  }
-
-  const target = `${base}/storage/v1/object/public/${BUCKET}/${ASSET_FOLDER}/${encodeURIComponent(filename)}`;
-
-  try {
-    const upstream = await fetch(target);
-    if (!upstream.ok || !upstream.body) {
-      console.error(`[assets] ${filename} -> ${upstream.status} from storage`);
-      return new Response("Not found", { status: 404 });
-    }
-    return new Response(upstream.body, {
-      status: 200,
-      headers: {
-        "content-type": upstream.headers.get("content-type") ?? "image/jpeg",
-        "cache-control": "public, max-age=31536000, immutable",
-      },
-    });
-  } catch (error) {
-    console.error("[assets] fetch failed for", filename, error);
-    return new Response("Not found", { status: 404 });
-  }
-}
+/* ------------------------------------------------------------------ *
+ * SSR error normalisation (unchanged)
+ * ------------------------------------------------------------------ */
 
 // h3 swallows in-handler throws into a normal 500 Response with body
 // {"unhandled":true,"message":"HTTPError"} — try/catch alone never fires for those.
@@ -300,22 +188,35 @@ function isH3SwallowedErrorBody(body: string): boolean {
   }
 }
 
+/* ------------------------------------------------------------------ */
+
 export default {
-  async fetch(request: Request, env: unknown, ctx: unknown) {
+  async fetch(request: Request, env?: unknown, ctx?: unknown) {
     try {
       const pathname = new URL(request.url).pathname;
-      if (pathname.startsWith(LEGACY_ASSET_PREFIX)) {
-        return await serveLegacyAsset(pathname);
-      }
 
-      const workerEnv = (env ?? {}) as WorkerEnv;
-      const workerCtx = (ctx ?? {}) as WorkerCtx;
+      // Diagnostics. Handled here rather than as a file route so it keeps
+      // working even when the router or the rest of the app is broken.
+      if (request.method === "GET" && pathname === "/api/img-status") {
+        return await imageStatusResponse(request, env);
+      }
 
       if (request.method === "POST" && pathname === IMG_UPLOAD_PATH) {
-        return await handleImageUpload(request, workerEnv);
+        return await handleImageUpload(request, env);
       }
-      if (request.method === "GET" && pathname.startsWith(IMG_PREFIX) && pathname !== IMG_UPLOAD_PATH) {
-        return await serveProductImage(pathname, workerEnv, workerCtx);
+
+      const isImagePath =
+        pathname.startsWith(LEGACY_ASSET_PREFIX) ||
+        (pathname.startsWith(IMG_PREFIX) && pathname !== IMG_UPLOAD_PATH);
+
+      if (isImagePath && (request.method === "GET" || request.method === "HEAD")) {
+        const key = objectKeyFromPath(pathname);
+        if (!key) return placeholderResponse("Ahsan Fashion");
+        const response = await resolveImage(key, { env, ctx, request, pathname });
+        if (request.method === "HEAD") {
+          return new Response(null, { status: response.status, headers: response.headers });
+        }
+        return response;
       }
 
       const handler = await getServerEntry();

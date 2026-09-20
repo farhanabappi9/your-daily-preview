@@ -1,3 +1,4 @@
+
 name = "project-preview-pro"
 compatibility_date = "2026-07-01"
 compatibility_flags = ["nodejs_compat"]
@@ -16,6 +17,32 @@ enabled = true
 binding = "PRODUCT_IMAGES"
 bucket_name = "product-images"
 
+[vars]
+# ---------------------------------------------------------------------------
+# Image recovery origins.
+#
+# This project has moved between three Supabase projects. A SQL export carries
+# the rows but NOT the Storage bucket, so images uploaded while the site lived
+# on an older project are still sitting in that older project's bucket.
+#
+# List those old project URLs here (comma-separated, no spaces). On a cache
+# miss the Worker will pull the file from the first origin that still has it
+# and copy it into R2, so each file only ever crosses the network once.
+#
+# Remove an entry once the old project is deleted — a dead origin just costs
+# a failed request.
+#
+# Example:
+# LEGACY_IMAGE_ORIGINS = "https://ldsnvxmaghkeinfjkpqz.supabase.co,https://xvxmydbhhpxiemmpahzo.supabase.co"
+LEGACY_IMAGE_ORIGINS = ""
+
+# The Lovable preview host, if it is still up. Used only for the bundled
+# catalog art (/__l5e/assets-v1/...) — logo, hero cover, category tiles and
+# the seeded product photos, at their original untouched URLs.
+#
+# Example:
+# LOVABLE_ORIGIN = "https://your-project.lovable.app"
+LOVABLE_ORIGIN = ""
 
 # Deploy:
 #   npm run build && npx wrangler deploy
@@ -27,3 +54,6 @@ bucket_name = "product-images"
 #
 # VITE_* values are baked in at build time, so they must be present in the
 # build environment (.env locally, or the CI/Cloudflare build env vars).
+#
+# After deploying, confirm the pipeline with:
+#   https://<your-domain>/api/img-status
