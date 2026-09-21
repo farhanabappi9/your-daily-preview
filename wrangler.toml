@@ -45,7 +45,7 @@ LEGACY_IMAGE_ORIGINS = "https://ldsnvxmaghkeinfjkpqz.supabase.co,https://xvxmydb
 #
 # Example:
 # LOVABLE_ORIGIN = "https://your-project.lovable.app"
-LOVABLE_ORIGIN = ""
+LOVABLE_ORIGIN = "https://lovable.dev/projects/7dd95b2e-9d7e-473b-a628-41ef7bb6eda5"
 
 # Deploy:
 #   npm run build && npx wrangler deploy
