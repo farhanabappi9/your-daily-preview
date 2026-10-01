@@ -90,3 +90,40 @@ export function publicClient() {
     },
   });
 }
+
+/**
+ * Detects the classic misconfiguration where SUPABASE_SERVICE_ROLE_KEY actually
+ * holds the *anon / publishable* key.
+ *
+ * Symptom: product lookups (public read) work, but every write that needs the
+ * service role (inserting into `orders`) fails with "permission denied" /
+ * RLS violation, because `orders` has INSERT revoked from `anon`.
+ *
+ * Returns a human-readable problem string, or null when the key looks fine.
+ * Never returns or logs the key itself.
+ */
+export function serviceKeyProblem(): string | null {
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) return "SUPABASE_SERVICE_ROLE_KEY সেট করা নেই";
+
+  if (key.startsWith("sb_publishable_")) {
+    return "SUPABASE_SERVICE_ROLE_KEY-তে publishable key বসানো আছে (sb_secret_... বা service_role key দরকার)";
+  }
+  if (key.startsWith("sb_secret_")) return null;
+
+  // Legacy JWT keys: check the `role` claim.
+  const parts = key.split(".");
+  if (parts.length === 3) {
+    try {
+      const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+      const payload = JSON.parse(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)));
+      if (payload?.role !== "service_role") {
+        return `SUPABASE_SERVICE_ROLE_KEY-এর role = "${payload?.role}" — এটা service_role key নয়`;
+      }
+      return null;
+    } catch {
+      return "SUPABASE_SERVICE_ROLE_KEY পড়া যায়নি (ভুল ফরম্যাট)";
+    }
+  }
+  return null;
+}

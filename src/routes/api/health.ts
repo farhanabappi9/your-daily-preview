@@ -16,13 +16,15 @@ export const Route = createFileRoute("/api/health")({
     handlers: {
       GET: async () => {
         const started = Date.now();
-        const { credentialsDiagnostics, publicClient } = await import("@/lib/shop.server");
+        const { credentialsDiagnostics, publicClient, serviceKeyProblem } = await import("@/lib/shop.server");
 
         const config = credentialsDiagnostics();
         const body: Record<string, unknown> = {
           ok: false,
           checkedAt: new Date().toISOString(),
           config,
+          // null = service key OK. Otherwise the reason orders cannot be saved.
+          serviceKeyProblem: serviceKeyProblem(),
         };
 
         try {
@@ -58,6 +60,7 @@ export const Route = createFileRoute("/api/health")({
           };
 
           body.ok =
+            !body.serviceKeyProblem &&
             !products.error &&
             !categories.error &&
             (products.count ?? 0) > 0 &&

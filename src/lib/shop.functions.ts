@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import type { DbBanner, DbCategory, DbProduct, ShopSettings } from "./shop-types";
 import { DEFAULT_SETTINGS } from "./shop-types";
-import { publicClient } from "./shop.server";
+import { publicClient, serviceKeyProblem } from "./shop.server";
 
 export const getStorefront = createServerFn({ method: "GET" }).handler(async () => {
   let db: ReturnType<typeof publicClient>;
@@ -168,6 +168,11 @@ export const placeOrder = createServerFn({ method: "POST" })
     return parsed.data;
   })
   .handler(async ({ data }) => {
+    // Fail fast (and loudly in the logs) if the "service role" key is really the
+    // anon key — that is what makes the `orders` insert get rejected.
+    const keyProblem = serviceKeyProblem();
+    if (keyProblem) console.error("[order] CONFIG ERROR —", keyProblem);
+
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const db = supabaseAdmin as any;
 
@@ -206,6 +211,10 @@ export const placeOrder = createServerFn({ method: "POST" })
       image: string | null;
     }[];
 
+    if (!items.length) {
+      throw new Error("কার্টের পণ্যগুলো এখন আর পাওয়া যাচ্ছে না। পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।");
+    }
+
     const subtotal = items.reduce((s, i) => s + i.price * i.quantity, 0);
 
     const { data: settingRow } = await db
@@ -221,8 +230,11 @@ export const placeOrder = createServerFn({ method: "POST" })
       data.area === "inside" ? Number(settings.shippingInside) : Number(settings.shippingOutside);
     if (settings.freeShippingOver > 0 && subtotal >= settings.freeShippingOver) shipping = 0;
 
+    // Coupon is only *validated* here. used_count is incremented AFTER the order
+    // is saved, so a failed order never burns a coupon use.
     let discount = 0;
     let couponCode: string | null = null;
+    let couponRow: any = null;
     if (data.couponCode) {
       const { data: c } = await db
         .from("coupons")
@@ -242,15 +254,19 @@ export const placeOrder = createServerFn({ method: "POST" })
           subtotal,
         );
         couponCode = c.code;
-        await db
-          .from("coupons")
-          .update({ used_count: Number(c.used_count) + 1 })
-          .eq("id", c.id);
+        couponRow = c;
       }
     }
 
     const total = Math.max(0, subtotal - discount) + shipping;
-    const orderNo = "AF" + Date.now().toString().slice(-8);
+    // 8 digits of the clock + 3 random digits — avoids UNIQUE(order_no) clashes
+    // when two customers order within the same millisecond.
+    const orderNo =
+      "AF" +
+      Date.now().toString().slice(-8) +
+      Math.floor(Math.random() * 1000)
+        .toString()
+        .padStart(3, "0");
 
     const { data: order, error } = await db
       .from("orders")
@@ -271,21 +287,47 @@ export const placeOrder = createServerFn({ method: "POST" })
       .select("id, order_no")
       .single();
     if (error) {
-      console.error("[order] insert failed:", error.message);
+      // Full detail goes to the server log (wrangler tail / Cloudflare Logs);
+      // the customer only sees the friendly sentence.
+      console.error(
+        "[order] insert failed:",
+        JSON.stringify({ code: error.code, message: error.message, details: error.details, hint: error.hint }),
+        keyProblem ? `| LIKELY CAUSE: ${keyProblem}` : "",
+      );
       throw new Error("অর্ডার সংরক্ষণ করা যায়নি। একটু পরে আবার চেষ্টা করুন অথবা আমাদের কল করুন।");
     }
 
-    await db.from("order_items").insert(items.map((i) => ({ ...i, order_id: order.id })));
-    await db
+    // Items are mandatory — if they fail, remove the empty order instead of
+    // leaving a ghost order with no products.
+    const { error: itemsError } = await db
+      .from("order_items")
+      .insert(items.map((i) => ({ ...i, order_id: order.id })));
+    if (itemsError) {
+      console.error("[order] order_items insert failed:", itemsError.message);
+      await db.from("orders").delete().eq("id", order.id);
+      throw new Error("অর্ডার সংরক্ষণ করা যায়নি। একটু পরে আবার চেষ্টা করুন অথবা আমাদের কল করুন।");
+    }
+
+    const { error: historyError } = await db
       .from("order_status_history")
       .insert({ order_id: order.id, status: "pending", note: "Order placed" });
+    if (historyError) console.error("[order] status history insert failed:", historyError.message);
+
+    if (couponRow) {
+      const { error: couponError } = await db
+        .from("coupons")
+        .update({ used_count: Number(couponRow.used_count) + 1 })
+        .eq("id", couponRow.id);
+      if (couponError) console.error("[order] coupon count update failed:", couponError.message);
+    }
 
     for (const i of items) {
       const p = list.find((x) => x.id === i.product_id)!;
-      await db
+      const { error: stockError } = await db
         .from("products")
         .update({ stock: Math.max(0, Number(p.stock) - i.quantity) })
         .eq("id", p.id);
+      if (stockError) console.error("[order] stock update failed:", p.slug, stockError.message);
     }
 
     return {
