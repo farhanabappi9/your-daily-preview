@@ -1,9 +1,9 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { deleteProduct, listAdminProducts, saveProduct } from "@/lib/admin.functions";
+import { checkMissingImages, deleteProduct, listAdminProducts, saveProduct } from "@/lib/admin.functions";
 import { formatBDT } from "@/lib/products";
-import { Plus, Trash2 } from "lucide-react";
+import { ImageOff, Plus, Trash2 } from "lucide-react";
 
 export const Route = createFileRoute("/admin/products/")({ component: ProductsPage });
 
@@ -14,12 +14,28 @@ function ProductsPage() {
     queryFn: () => listAdminProducts(),
   });
   const [q, setQ] = useState("");
+  const [onlyMissing, setOnlyMissing] = useState(false);
+
+  const allRows = (data ?? []) as any[];
+
+  const { data: missingCheck } = useQuery({
+    queryKey: ["admin-products-missing-images", allRows.map((p) => p.id).join(",")],
+    queryFn: () => checkMissingImages({ data: { paths: allRows.map((p) => p.images?.[0]) } }),
+    enabled: allRows.length > 0,
+    staleTime: 5 * 60 * 1000,
+  });
+  const missingPaths = useMemo(() => new Set(missingCheck?.missing ?? []), [missingCheck]);
+  const isMissing = (p: any) => !p.images?.[0] || missingPaths.has(p.images[0]);
+  const missingCount = useMemo(() => allRows.filter(isMissing).length, [allRows, missingPaths]);
 
   const rows = useMemo(() => {
-    const all = (data ?? []) as any[];
     const t = q.trim().toLowerCase();
-    return t ? all.filter((p) => p.name.toLowerCase().includes(t) || p.slug.includes(t)) : all;
-  }, [data, q]);
+    let out = t
+      ? allRows.filter((p) => p.name.toLowerCase().includes(t) || p.slug.includes(t))
+      : allRows;
+    if (onlyMissing) out = out.filter(isMissing);
+    return out;
+  }, [allRows, q, onlyMissing, missingPaths]);
 
   const toggle = async (p: any, patch: any) => {
     await saveProduct({
@@ -58,12 +74,24 @@ function ProductsPage() {
         </Link>
       </div>
 
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="প্রোডাক্ট খুঁজুন"
-        className="w-full rounded-md border px-3 py-2 text-sm sm:max-w-sm"
-      />
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="প্রোডাক্ট খুঁজুন"
+          className="w-full rounded-md border px-3 py-2 text-sm sm:max-w-sm"
+        />
+        {missingCount > 0 && (
+          <label className="flex items-center gap-2 text-sm text-destructive">
+            <input
+              type="checkbox"
+              checked={onlyMissing}
+              onChange={(e) => setOnlyMissing(e.target.checked)}
+            />
+            শুধু ছবি নেই এমন প্রোডাক্ট দেখাও ({missingCount}টি)
+          </label>
+        )}
+      </div>
 
       <div className="overflow-x-auto rounded-lg border bg-card">
         <table className="w-full text-sm">
@@ -101,7 +129,14 @@ function ProductsPage() {
                       >
                         {p.name}
                       </Link>
-                      <div className="text-xs text-muted-foreground">{p.category_slug}</div>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>{p.category_slug}</span>
+                        {isMissing(p) && (
+                          <span className="flex items-center gap-1 rounded bg-destructive/10 px-1.5 py-0.5 font-medium text-destructive">
+                            <ImageOff className="h-3 w-3" /> ছবি নেই
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </td>

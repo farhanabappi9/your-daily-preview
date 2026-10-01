@@ -36,6 +36,8 @@ export type R2Object = {
 
 export type R2Bucket = {
   get: (key: string) => Promise<R2Object | null>;
+  /** Cheap existence/metadata check — no body downloaded. Not every R2 binding exposes this. */
+  head?: (key: string) => Promise<{ size?: number } | null>;
   put: (
     key: string,
     value: ArrayBuffer | ReadableStream | Uint8Array,

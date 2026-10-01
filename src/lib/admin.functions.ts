@@ -306,6 +306,48 @@ export const listAdminProducts = createServerFn({ method: "GET" })
     return data ?? [];
   });
 
+/**
+ * For the admin product list's "ছবি নেই" badge/filter.
+ * Given the raw `images[0]` path each product has stored, reports which of
+ * those paths do NOT currently have a real file in R2 — i.e. the ones that
+ * are still showing the placeholder on the storefront.
+ *
+ * Only checks R2 (fast, in-Worker, no external network call). It does not
+ * retry Supabase/legacy origins the way the storefront's resolveImage()
+ * does, so this is a conservative "definitely still broken" list, not a
+ * guarantee that every other product's photo is good — but it's exactly
+ * the list you need to work through.
+ */
+export const checkMissingImages = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: { paths: (string | null | undefined)[] }) =>
+    z.object({ paths: z.array(z.string().nullable().optional()) }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const { getProductImagesBucket } = await import("@/lib/worker-runtime");
+    const { objectKeyFromPath } = await import("@/lib/image-serving");
+
+    const bucket = getProductImagesBucket();
+    const missing: string[] = [];
+    const uniquePaths = [...new Set(data.paths.filter((p): p is string => Boolean(p)))];
+
+    for (const path of uniquePaths) {
+      const key = objectKeyFromPath(path);
+      if (!key) {
+        missing.push(path); // not even a recognisable shape — can't be resolved
+        continue;
+      }
+      if (!bucket) break; // no binding reachable — can't check, don't guess
+      try {
+        const found = bucket.head ? await bucket.head(key) : await bucket.get(key);
+        if (!found) missing.push(path);
+      } catch {
+        missing.push(path);
+      }
+    }
+    return { missing };
+  });
+
 const productInput = z.object({
   id: z.string().uuid().optional(),
   slug: z.string().trim().min(1).max(200),
