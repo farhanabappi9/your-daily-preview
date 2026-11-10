@@ -116,3 +116,14 @@ export function detectedByLabel(by: unknown): string | undefined {
   if (typeof by !== "string" || !by) return undefined;
   return DETECTED_BY_LABEL[by] ?? by;
 }
+
+/** Order statuses shown in the admin status dropdowns and filters. */
+export const STATUSES = [
+  "pending",
+  "confirmed",
+  "processing",
+  "shipped",
+  "delivered",
+  "cancelled",
+  "returned",
+];

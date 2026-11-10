@@ -1,409 +1,465 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { deleteOrder, getOrder, updateOrder } from "@/lib/admin.functions";
-import { sendOrderToCourier, refreshCourierStatus } from "@/lib/courier.functions";
+import { useMemo, useState } from "react";
+import { listOrders } from "@/lib/admin.functions";
+import { bulkSendOrdersToCourier } from "@/lib/courier.functions";
 import { formatBDT } from "@/lib/products";
-import { ArrowLeft, Printer, Trash2, Truck, RefreshCw, X } from "lucide-react";
-import { STATUSES } from "./admin.orders.index";
+import { Download, Printer, Truck } from "lucide-react";
+import { ORDER_SOURCES, SOURCE_LABEL, sourceKey, type OrderSource } from "@/lib/order-source";
 import { SourceBadge } from "@/components/admin/SourceBadge";
-import {
-  cleanDbLiteral,
-  courierStatusLabel,
-  detectedByLabel,
-  isEstimatedSource,
-} from "@/lib/order-display";
 import { computeCodAmount } from "@/lib/cod";
+import {
+  courierStatusLabel,
+  isBrokenDbLiteral,
+  isEstimatedSource,
+  orderStatusLabel,
+  orderStatusTone,
+  paymentLabel,
+  STATUSES,
+} from "@/lib/order-display";
 
-export const Route = createFileRoute("/admin/orders/$id")({ component: OrderDetail });
+export const Route = createFileRoute("/admin/orders/")({ component: OrdersPage });
 
-function OrderDetail() {
-  const { id } = Route.useParams();
-  const qc = useQueryClient();
-  const navigate = useNavigate();
-  const { data, isLoading } = useQuery({
-    queryKey: ["admin-order", id],
-    queryFn: () => getOrder({ data: { id } }),
-  });
-  const [note, setNote] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [courierBusy, setCourierBusy] = useState(false);
-  const [courierMsg, setCourierMsg] = useState<string | null>(null);
-  // null = হিসাব করা COD (total) যাবে; admin কিছু লিখলে সেটাই যাবে
-  const [codInput, setCodInput] = useState<string | null>(null);
-  // ছবি বড় করে দেখার জন্য lightbox state
-  const [zoom, setZoom] = useState<{ src: string; alt: string } | null>(null);
+type SourceFilter = "all" | OrderSource | "unknown";
 
-  if (isLoading) return <p className="text-sm text-muted-foreground">লোড হচ্ছে…</p>;
-  const order: any = data?.order;
-  if (!order) return <p className="text-sm text-muted-foreground">Order পাওয়া যায়নি।</p>;
+const DATE_RANGES: { key: string; label: string; days: number | null }[] = [
+  { key: "all", label: "সব সময়", days: null },
+  { key: "today", label: "আজ", days: 0 },
+  { key: "3", label: "শেষ ৩ দিন", days: 3 },
+  { key: "5", label: "শেষ ৫ দিন", days: 5 },
+  { key: "7", label: "শেষ ৭ দিন", days: 7 },
+  { key: "30", label: "শেষ ৩০ দিন", days: 30 },
+];
 
-  const patch = async (p: any) => {
-    setSaving(true);
-    try {
-      await updateOrder({ data: { id, ...p } });
-      await qc.invalidateQueries({ queryKey: ["admin-order", id] });
-      await qc.invalidateQueries({ queryKey: ["admin-orders"] });
-      await qc.invalidateQueries({ queryKey: ["admin-dashboard"] });
-    } finally {
-      setSaving(false);
-    }
+function rangeStart(days: number | null): number {
+  if (days === null) return 0;
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - days);
+  return d.getTime();
+}
+
+/** Excel-এ বাংলা ঠিকমতো দেখাতে BOM সহ CSV। */
+function downloadCsv(rows: any[], filename: string) {
+  const header = [
+    "Order No",
+    "Date",
+    "Source",
+    "Ad?",
+    "Campaign",
+    "Customer",
+    "Phone",
+    "Address",
+    "Items",
+    "Subtotal",
+    "Delivery",
+    "Discount",
+    "Total",
+    "COD (Steadfast)",
+    "Status",
+    "Courier",
+  ];
+  const esc = (v: unknown) => {
+    const t = String(v ?? "");
+    return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
   };
+  const lines = rows.map((o) =>
+    [
+      o.order_no,
+      new Date(o.created_at).toLocaleString("en-GB"),
+      SOURCE_LABEL[sourceKey(o.source)] + (isEstimatedSource(o.attribution) ? " (আনুমানিক)" : ""),
+      o.source_medium === "paid" ? "Yes" : "",
+      o.attribution?.utm_campaign ?? "",
+      o.customer_name,
+      o.phone,
+      o.address,
+      (o.order_items ?? []).map((i: any) => `${i.name} x${i.quantity}`).join("; "),
+      o.subtotal,
+      o.shipping,
+      o.discount,
+      o.total,
+      computeCodAmount(o),
+      orderStatusLabel(o.status),
+      o.courier_tracking_code ?? "",
+    ]
+      .map(esc)
+      .join(","),
+  );
+  const csv = "\ufeff" + [header.join(","), ...lines].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
-  const sendToCourier = async () => {
-    setCourierBusy(true);
-    setCourierMsg(null);
-    try {
-      const override = codInput !== null && codInput.trim() !== "" ? Number(codInput) : undefined;
-      if (override !== undefined && (!Number.isFinite(override) || override < 0)) {
-        setCourierMsg("COD-এর ঘরে সঠিক টাকার অঙ্ক লিখুন।");
-        return;
-      }
-      const res = await sendOrderToCourier({ data: { id, codAmount: override } });
-      setCourierMsg(
-        res.ok
-          ? `Steadfast-এ পাঠানো হয়েছে — COD ৳${res.codAmount}${res.warning ? ` (${res.warning})` : ""}`
-          : res.error,
-      );
-      if (res.ok) setCodInput(null);
-      await qc.invalidateQueries({ queryKey: ["admin-order", id] });
-    } catch (e: any) {
-      setCourierMsg(String(e?.message ?? e));
-    } finally {
-      setCourierBusy(false);
-    }
-  };
-
-  const refreshStatus = async () => {
-    setCourierBusy(true);
-    setCourierMsg(null);
-    try {
-      const res = await refreshCourierStatus({ data: { id } });
-      setCourierMsg(`Delivery status: ${res.delivery_status}`);
-      await qc.invalidateQueries({ queryKey: ["admin-order", id] });
-    } catch (e: any) {
-      setCourierMsg(String(e?.message ?? e));
-    } finally {
-      setCourierBusy(false);
-    }
-  };
-
+/** Order row-এর প্রোডাক্ট ছবিগুলো (বড় thumbnail, hover করলে আরও বড় preview) */
+function OrderItemThumbs({ items }: { items: any[] }) {
+  const list = (items ?? []).filter((i) => i?.image);
+  if (list.length === 0) {
+    return (
+      <div className="flex h-16 w-16 items-center justify-center rounded-md border bg-muted text-[10px] text-muted-foreground">
+        No image
+      </div>
+    );
+  }
+  const shown = list.slice(0, 3);
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <Link
-          to="/admin/orders"
-          className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" /> Orders
-        </Link>
-        <div className="flex gap-2">
-          <Link
-            to="/admin/invoice/$id"
-            params={{ id }}
-            target="_blank"
-            className="flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground"
-          >
-            <Printer className="h-4 w-4" /> Invoice
-          </Link>
-          <button
-            onClick={async () => {
-              if (!confirm("এই অর্ডারটি মুছে ফেলবেন?")) return;
-              await deleteOrder({ data: { id } });
-              qc.invalidateQueries({ queryKey: ["admin-orders"] });
-              navigate({ to: "/admin/orders" });
-            }}
-            className="flex items-center gap-2 rounded-md border border-destructive px-3 py-2 text-sm text-destructive"
-          >
-            <Trash2 className="h-4 w-4" /> Delete
-          </button>
-        </div>
-      </div>
-
-      <h1 className="text-2xl font-bold">{order.order_no}</h1>
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
-          <div className="rounded-lg border bg-card">
-            <h2 className="border-b p-4 font-semibold">Items</h2>
-            <table className="w-full text-sm">
-              <tbody>
-                {order.order_items?.map((it: any) => (
-                  <tr key={it.id} className="border-b last:border-0">
-                    <td className="w-[128px] p-3">
-                      {it.image ? (
-                        <button
-                          type="button"
-                          onClick={() => setZoom({ src: it.image, alt: it.name })}
-                          title="বড় করে দেখতে ক্লিক করুন"
-                          className="block overflow-hidden rounded-md border transition hover:opacity-90"
-                        >
-                          <img
-                            src={it.image}
-                            alt={it.name}
-                            loading="lazy"
-                            decoding="async"
-                            className="h-28 w-28 object-cover"
-                          />
-                        </button>
-                      ) : (
-                        <div className="flex h-28 w-28 items-center justify-center rounded-md border bg-muted text-[11px] text-muted-foreground">
-                          No image
-                        </div>
-                      )}
-                    </td>
-                    <td className="p-3 align-middle">
-                      <div className="font-medium">{it.name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {formatBDT(Number(it.price))} × {it.quantity}
-                      </div>
-                    </td>
-                    <td className="p-3 text-right align-middle font-medium">
-                      {formatBDT(Number(it.price) * it.quantity)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="space-y-1 border-t p-4 text-sm">
-              <Row label="Subtotal" value={formatBDT(Number(order.subtotal))} />
-              {Number(order.discount) > 0 && (
-                <Row label="Discount" value={"-" + formatBDT(Number(order.discount))} />
-              )}
-              <Row label="Delivery" value={formatBDT(Number(order.shipping))} />
-              <Row label="Total" value={formatBDT(Number(order.total))} bold />
-            </div>
-          </div>
-
-          <div className="rounded-lg border bg-card p-4">
-            <h2 className="mb-3 font-semibold">Status history</h2>
-            <ul className="space-y-2 text-sm">
-              {data?.history?.map((h: any) => (
-                <li key={h.id} className="flex justify-between border-b pb-1 last:border-0">
-                  <span>{h.status}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(h.created_at).toLocaleString("en-GB")}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <div className="rounded-lg border bg-card p-4 text-sm">
-            <h2 className="mb-3 font-semibold">Customer</h2>
-            <p className="font-medium">{order.customer_name}</p>
-            <p className="text-muted-foreground">{order.phone}</p>
-            <p className="mt-2 whitespace-pre-line text-muted-foreground">{order.address}</p>
-            {order.note && <p className="mt-2 rounded bg-muted p-2 text-xs">📝 {order.note}</p>}
-          </div>
-
-          <div className="space-y-2 rounded-lg border bg-card p-4 text-sm">
-            <h2 className="font-semibold">অর্ডার কোথা থেকে এসেছে</h2>
-            <SourceBadge
-              source={order.source}
-              medium={order.source_medium}
-              estimated={isEstimatedSource(order.attribution)}
-            />
-            {order.attribution ? (
-              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-                {(
-                  [
-                    ["Campaign", order.attribution.utm_campaign],
-                    ["Ad / Content", order.attribution.utm_content],
-                    ["utm_source", order.attribution.utm_source],
-                    ["utm_medium", order.attribution.utm_medium],
-                    ["TikTok click", order.attribution.ttclid && "✓ ttclid"],
-                    ["Facebook click", order.attribution.fbclid && "✓ fbclid"],
-                    ["Google click", order.attribution.gclid && "✓ gclid"],
-                    ["Referrer", order.attribution.referrer],
-                    ["Landing page", order.attribution.landing_page],
-                    ["চেনা গেছে", detectedByLabel(order.attribution.detected_by)],
-                  ] as [string, string | undefined][]
-                )
-                  .filter(([, v]) => v)
-                  .map(([k, v]) => (
-                    <div key={k} className="contents">
-                      <dt className="text-muted-foreground">{k}</dt>
-                      <dd className="break-all">{v}</dd>
-                    </div>
-                  ))}
-              </dl>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                এই অর্ডারটি সোর্স ট্র্যাকিং চালুর আগের — সোর্স জানা নেই।
-              </p>
-            )}
-            {order.server_events && (
-              <p className="text-[11px] text-muted-foreground">
-                Server event:{" "}
-                {Object.entries(order.server_events)
-                  .filter(([k]) => k !== "at")
-                  .map(([k, v]) => `${k} ${String(v).startsWith("ok") ? "✓" : "✗"}`)
-                  .join(" · ")}
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-3 rounded-lg border bg-card p-4 text-sm">
-            <h2 className="font-semibold">Courier — Steadfast</h2>
-            {order.courier_consignment_id ? (
-              <div className="space-y-1 text-xs">
-                <p>
-                  <span className="text-muted-foreground">Consignment ID:</span>{" "}
-                  {order.courier_consignment_id}
-                </p>
-                <p>
-                  <span className="text-muted-foreground">Tracking code:</span>{" "}
-                  {order.courier_tracking_code}
-                </p>
-                <p>
-                  <span className="text-muted-foreground">Status:</span>{" "}
-                  <span className="whitespace-nowrap rounded-full bg-muted px-2 py-0.5">
-                    {courierStatusLabel(order.courier_status)}
-                  </span>
-                </p>
-                <button
-                  onClick={refreshStatus}
-                  disabled={courierBusy}
-                  className="mt-2 flex items-center gap-2 rounded-md border px-3 py-2 text-xs font-medium disabled:opacity-50"
-                >
-                  <RefreshCw className="h-3.5 w-3.5" /> Status Refresh করুন
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <label className="block text-xs text-muted-foreground">
-                  COD (কাস্টমারের কাছ থেকে কুরিয়ার যা নেবে)
-                </label>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm">৳</span>
-                  <input
-                    type="number"
-                    min={0}
-                    inputMode="numeric"
-                    value={codInput ?? String(computeCodAmount(order))}
-                    onChange={(e) => setCodInput(e.target.value)}
-                    className="w-32 rounded-md border px-2 py-1.5 text-sm"
-                  />
-                  {codInput !== null && (
-                    <button
-                      type="button"
-                      onClick={() => setCodInput(null)}
-                      className="text-xs underline text-muted-foreground"
-                    >
-                      Total-এ ফেরত
-                    </button>
-                  )}
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  পণ্য {formatBDT(Number(order.subtotal))}
-                  {Number(order.discount) > 0 &&
-                    ` − ডিসকাউন্ট ${formatBDT(Number(order.discount))}`}{" "}
-                  + ডেলিভারি {formatBDT(Number(order.shipping))} = {formatBDT(Number(order.total))}
-                </p>
-                <button
-                  onClick={sendToCourier}
-                  disabled={courierBusy}
-                  className="flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
-                >
-                  <Truck className="h-4 w-4" /> Send to Steadfast
-                </button>
-              </div>
-            )}
-            {order.courier_error && (
-              <p className="rounded bg-destructive/10 p-2 text-xs text-destructive">
-                {order.courier_error}
-              </p>
-            )}
-            {courierMsg && <p className="text-xs text-muted-foreground">{courierMsg}</p>}
-          </div>
-
-          <div className="space-y-3 rounded-lg border bg-card p-4 text-sm">
-            <h2 className="font-semibold">Manage</h2>
-            <label className="block text-xs text-muted-foreground">Order status</label>
-            <select
-              value={cleanDbLiteral(order.status)}
-              disabled={saving}
-              onChange={(e) => patch({ status: e.target.value })}
-              className="w-full rounded-md border px-3 py-2 text-sm"
-            >
-              {STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-
-            <label className="block text-xs text-muted-foreground">Payment status</label>
-            <select
-              value={cleanDbLiteral(order.payment_status)}
-              disabled={saving}
-              onChange={(e) => patch({ payment_status: e.target.value })}
-              className="w-full rounded-md border px-3 py-2 text-sm"
-            >
-              {["unpaid", "paid", "refunded"].map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-
-            <label className="block text-xs text-muted-foreground">Courier / tracking note</label>
-            <input
-              defaultValue={order.tracking_note ?? ""}
-              onBlur={(e) => patch({ tracking_note: e.target.value })}
-              className="w-full rounded-md border px-3 py-2 text-sm"
-            />
-
-            <label className="block text-xs text-muted-foreground">Admin note</label>
-            <textarea
-              defaultValue={order.admin_note ?? ""}
-              onBlur={(e) => patch({ admin_note: e.target.value })}
-              rows={3}
-              className="w-full rounded-md border px-3 py-2 text-sm"
-            />
-            {note && <p className="text-xs text-muted-foreground">{note}</p>}
-          </div>
-        </div>
-      </div>
-
-      {/* ছবি বড় করে দেখার lightbox */}
-      {zoom && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setZoom(null)}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
-        >
-          <button
-            type="button"
-            onClick={() => setZoom(null)}
-            aria-label="Close"
-            className="absolute right-4 top-4 rounded-full bg-card p-2 text-foreground shadow"
-          >
-            <X className="h-5 w-5" />
-          </button>
-          <figure onClick={(e) => e.stopPropagation()} className="max-h-full max-w-3xl">
+    <div className="flex items-center gap-1.5">
+      {shown.map((it: any, idx: number) => (
+        <div key={it.id ?? idx} className="group relative">
+          <img
+            src={it.image}
+            alt={it.name}
+            loading="lazy"
+            decoding="async"
+            className="h-16 w-16 rounded-md border object-cover"
+          />
+          {/* hover preview */}
+          <div className="pointer-events-none absolute left-0 top-full z-30 hidden pt-2 group-hover:block">
             <img
-              src={zoom.src}
-              alt={zoom.alt}
-              className="max-h-[80vh] w-auto rounded-lg object-contain shadow-2xl"
+              src={it.image}
+              alt={it.name}
+              className="h-64 w-64 rounded-lg border bg-card object-cover shadow-xl"
             />
-            <figcaption className="mt-3 text-center text-sm text-white">{zoom.alt}</figcaption>
-          </figure>
+          </div>
         </div>
+      ))}
+      {list.length > shown.length && (
+        <span className="text-xs text-muted-foreground">+{list.length - shown.length}</span>
       )}
     </div>
   );
 }
 
-function Row({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
+function OrdersPage() {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({ queryKey: ["admin-orders"], queryFn: () => listOrders() });
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState("all");
+  const [source, setSource] = useState<SourceFilter>("all");
+  const [range, setRange] = useState("all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMsg, setBulkMsg] = useState<string | null>(null);
+
+  // তারিখ + সার্চ ফিল্টার করা অর্ডার (সোর্স ফিল্টারের আগে) — সোর্স-ভিত্তিক গণনার জন্য
+  const baseRows = useMemo(() => {
+    const all = (data ?? []) as any[];
+    const from = rangeStart(DATE_RANGES.find((r) => r.key === range)?.days ?? null);
+    const t = q.trim().toLowerCase();
+    return all.filter((o) => {
+      const okStatus = status === "all" || o.status === status;
+      const okDate = !from || new Date(o.created_at).getTime() >= from;
+      const okQ =
+        !t ||
+        o.order_no?.toLowerCase().includes(t) ||
+        o.customer_name?.toLowerCase().includes(t) ||
+        o.phone?.includes(t);
+      return okStatus && okDate && okQ;
+    });
+  }, [data, q, status, range]);
+
+  const rows = useMemo(
+    () => baseRows.filter((o) => source === "all" || sourceKey(o.source) === source),
+    [baseRows, source],
+  );
+
+  const sourceCounts = useMemo(() => {
+    const counts: Record<string, { n: number; value: number }> = {};
+    for (const o of baseRows) {
+      const k = sourceKey(o.source);
+      counts[k] = counts[k] ?? { n: 0, value: 0 };
+      counts[k].n += 1;
+      counts[k].value += Number(o.total) || 0;
+    }
+    return counts;
+  }, [baseRows]);
+
+  // ডাটাবেস চেক: নতুন SQL চালানো হয়েছে কিনা, আর ভাঙা payment মান আছে কিনা
+  const health = useMemo(() => {
+    const all = (data ?? []) as any[];
+    return {
+      trackingMissing: all.length > 0 && !all.some((o) => "source" in o),
+      brokenPayment: all.filter(
+        (o) => isBrokenDbLiteral(o.payment_method) || isBrokenDbLiteral(o.payment_status),
+      ).length,
+      estimated: all.filter((o) => isEstimatedSource(o.attribution)).length,
+    };
+  }, [data]);
+
+  const toggleOne = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    setSelected((prev) => (prev.size === rows.length ? new Set() : new Set(rows.map((r) => r.id))));
+  };
+
+  const bulkSend = async () => {
+    if (selected.size === 0) return;
+    setBulkBusy(true);
+    setBulkMsg(null);
+    try {
+      const res = await bulkSendOrdersToCourier({ data: { ids: Array.from(selected) } });
+      const failedList = res.results
+        .filter((r) => r.status === "error")
+        .map((r) => `${r.invoice}: ${r.error}`)
+        .join(" | ");
+      setBulkMsg(
+        `পাঠানো হয়েছে: ${res.sent}, ব্যর্থ: ${res.failed}, আগেই পাঠানো ছিল: ${res.alreadySent}` +
+          (failedList ? ` — ${failedList}` : ""),
+      );
+      setSelected(new Set());
+      await qc.invalidateQueries({ queryKey: ["admin-orders"] });
+    } catch (e: any) {
+      setBulkMsg(String(e?.message ?? e));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   return (
-    <div className={`flex justify-between ${bold ? "text-base font-bold" : ""}`}>
-      <span>{label}</span>
-      <span>{value}</span>
+    <div className="space-y-4">
+      <h1 className="text-xl font-bold sm:text-2xl">Orders</h1>
+
+      <div className="flex flex-wrap gap-2">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Order no / নাম / ফোন খুঁজুন"
+          className="min-w-0 flex-1 basis-full sm:basis-auto rounded-md border px-3 py-2 text-sm"
+        />
+        <select
+          value={range}
+          onChange={(e) => setRange(e.target.value)}
+          className="rounded-md border px-3 py-2 text-sm"
+        >
+          {DATE_RANGES.map((r) => (
+            <option key={r.key} value={r.key}>
+              {r.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={source}
+          onChange={(e) => setSource(e.target.value as SourceFilter)}
+          className="rounded-md border px-3 py-2 text-sm"
+        >
+          <option value="all">সব সোর্স</option>
+          {[...ORDER_SOURCES, "unknown" as const].map((k) => (
+            <option key={k} value={k}>
+              {SOURCE_LABEL[k]}
+            </option>
+          ))}
+        </select>
+        <select
+          value={status}
+          onChange={(e) => setStatus(e.target.value)}
+          className="rounded-md border px-3 py-2 text-sm"
+        >
+          <option value="all">সব status</option>
+          {STATUSES.map((s) => (
+            <option key={s} value={s}>
+              {orderStatusLabel(s)}
+            </option>
+          ))}
+        </select>
+        {selected.size > 0 && (
+          <button
+            onClick={bulkSend}
+            disabled={bulkBusy}
+            className="flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+          >
+            <Truck className="h-4 w-4" /> Steadfast-এ পাঠান ({selected.size})
+          </button>
+        )}
+      </div>
+      {bulkMsg && <p className="text-xs text-muted-foreground">{bulkMsg}</p>}
+
+      {health.trackingMissing && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+          ⚠️ সোর্স ট্র্যাকিং-এর SQL এখনো ডাটাবেসে চালানো হয়নি — তাই নতুন অর্ডারেও সোর্স সেভ
+          হচ্ছে না। Supabase → SQL Editor-এ{" "}
+          <code>20261110120000_order_source_tracking.sql</code> চালান।
+        </div>
+      )}
+      {health.brokenPayment > 0 && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+          {health.brokenPayment}টি অর্ডারে payment-এর মান ডাটাবেসে ভুলভাবে সেভ আছে (যেমন{" "}
+          <code>'cod'::text</code>)। এখানে ঠিক করে দেখানো হচ্ছে; স্থায়ীভাবে ঠিক করতে{" "}
+          <code>20261111090000_fix_defaults_backfill_source.sql</code> চালান।
+        </div>
+      )}
+      {health.estimated > 0 && (
+        <p className="text-[11px] text-muted-foreground">
+          ডট-বর্ডারের "আনুমানিক" সোর্স = ট্র্যাকিং চালুর আগের {health.estimated}টি অর্ডার; এগুলো
+          আন্দাজে বসানো, নিশ্চিত নয়।
+        </p>
+      )}
+
+      {/* সোর্স অনুযায়ী অর্ডার সংখ্যা — ক্লিক করলে শুধু ওই সোর্সের অর্ডার দেখাবে */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => setSource("all")}
+          className={`rounded-full border px-3 py-1 text-xs font-medium ${source === "all" ? "border-primary bg-primary/10" : ""}`}
+        >
+          সব · {baseRows.length}
+        </button>
+        {[...ORDER_SOURCES, "unknown" as const]
+          .filter((k) => sourceCounts[k]?.n)
+          .map((k) => (
+            <button
+              key={k}
+              onClick={() => setSource(k)}
+              className={`flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs ${source === k ? "border-primary bg-primary/10" : ""}`}
+            >
+              <SourceBadge source={k === "unknown" ? null : k} />
+              <span className="font-semibold">{sourceCounts[k].n}</span>
+              <span className="text-muted-foreground">· {formatBDT(sourceCounts[k].value)}</span>
+            </button>
+          ))}
+        <button
+          onClick={() =>
+            downloadCsv(
+              rows,
+              `orders-${source}-${range}-${new Date().toISOString().slice(0, 10)}.csv`,
+            )
+          }
+          disabled={rows.length === 0}
+          className="ml-auto flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
+        >
+          <Download className="h-3.5 w-3.5" /> CSV ডাউনলোড ({rows.length})
+        </button>
+      </div>
+
+      <div className="overflow-x-auto rounded-lg border bg-card">
+        <table className="w-full text-sm">
+          <thead className="bg-muted text-left text-xs uppercase text-muted-foreground">
+            <tr>
+              <th className="p-3">
+                <input
+                  type="checkbox"
+                  checked={rows.length > 0 && selected.size === rows.length}
+                  onChange={toggleAll}
+                />
+              </th>
+              <th className="p-3">Product</th>
+              <th className="p-3">Order</th>
+              <th className="p-3">Source</th>
+              <th className="p-3">Customer</th>
+              <th className="hidden p-3 sm:table-cell">Items</th>
+              <th className="p-3">Total</th>
+              <th className="hidden p-3 lg:table-cell">Payment</th>
+              <th className="p-3">Status</th>
+              <th className="hidden p-3 md:table-cell">Date</th>
+              <th className="p-3 text-right">Invoice</th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading && (
+              <tr>
+                <td colSpan={11} className="p-6 text-center text-muted-foreground">
+                  লোড হচ্ছে…
+                </td>
+              </tr>
+            )}
+            {rows.map((o) => (
+              <tr key={o.id} className="border-t hover:bg-muted/40">
+                <td className="p-3">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(o.id)}
+                    onChange={() => toggleOne(o.id)}
+                  />
+                </td>
+                <td className="p-3">
+                  <Link to="/admin/orders/$id" params={{ id: o.id }}>
+                    <OrderItemThumbs items={o.order_items ?? []} />
+                  </Link>
+                </td>
+                <td className="p-3">
+                  <Link
+                    to="/admin/orders/$id"
+                    params={{ id: o.id }}
+                    className="whitespace-nowrap font-medium text-primary hover:underline"
+                  >
+                    {o.order_no}
+                  </Link>
+                  {o.courier_consignment_id && (
+                    <div className="whitespace-nowrap text-[11px] text-muted-foreground">
+                      📦 {courierStatusLabel(o.courier_status)}
+                    </div>
+                  )}
+                </td>
+                <td className="p-3">
+                  <SourceBadge
+                    source={o.source}
+                    medium={o.source_medium}
+                    estimated={isEstimatedSource(o.attribution)}
+                  />
+                  {o.attribution?.utm_campaign && (
+                    <div
+                      className="mt-1 max-w-[140px] truncate text-[11px] text-muted-foreground"
+                      title={o.attribution.utm_campaign}
+                    >
+                      {o.attribution.utm_campaign}
+                    </div>
+                  )}
+                </td>
+                <td className="p-3">
+                  <span className="line-clamp-1">{o.customer_name}</span>
+                  <div className="text-xs text-muted-foreground">{o.phone}</div>
+                  <div className="text-[11px] text-muted-foreground md:hidden">
+                    {new Date(o.created_at).toLocaleDateString("en-GB")}
+                  </div>
+                </td>
+                <td className="hidden p-3 sm:table-cell">{o.order_items?.length ?? 0}</td>
+                <td className="whitespace-nowrap p-3">{formatBDT(Number(o.total))}</td>
+                <td className="hidden whitespace-nowrap p-3 text-xs lg:table-cell">
+                  {paymentLabel(o.payment_method, o.payment_status)}
+                </td>
+                <td className="p-3">
+                  <span
+                    className={`inline-block whitespace-nowrap rounded-full px-2 py-1 text-xs font-medium ${orderStatusTone(o.status)}`}
+                  >
+                    {orderStatusLabel(o.status)}
+                  </span>
+                </td>
+                <td className="hidden whitespace-nowrap p-3 text-xs text-muted-foreground md:table-cell">
+                  {new Date(o.created_at).toLocaleString("en-GB")}
+                </td>
+                <td className="p-3 text-right">
+                  <Link
+                    to="/admin/invoice/$id"
+                    params={{ id: o.id }}
+                    target="_blank"
+                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-xs font-medium hover:bg-muted"
+                  >
+                    <Printer className="h-3.5 w-3.5" /> Invoice
+                  </Link>
+                </td>
+              </tr>
+            ))}
+            {!isLoading && rows.length === 0 && (
+              <tr>
+                <td colSpan={11} className="p-6 text-center text-muted-foreground">
+                  কোনো অর্ডার পাওয়া যায়নি।
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
