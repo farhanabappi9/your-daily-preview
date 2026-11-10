@@ -20,15 +20,17 @@ export const Route = createFileRoute("/api/courier/steadfast-webhook")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const jsonResponse = (status: number, body: { status: "success" | "error"; message: string }) =>
+        const jsonResponse = (
+          status: number,
+          body: { status: "success" | "error"; message: string },
+        ) =>
           new Response(JSON.stringify(body), {
             status,
             headers: { "content-type": "application/json" },
           });
 
-        const { verifySteadfastWebhookToken, mapSteadfastStatusToOrderStatus } = await import(
-          "@/lib/steadfast.server"
-        );
+        const { verifySteadfastWebhookToken, mapSteadfastStatusToOrderStatus } =
+          await import("@/lib/steadfast.server");
 
         const authHeader = request.headers.get("authorization");
         if (!verifySteadfastWebhookToken(authHeader)) {
@@ -50,7 +52,10 @@ export const Route = createFileRoute("/api/courier/steadfast-webhook")({
           return jsonResponse(400, { status: "error", message: "Invalid consignment ID." });
         }
 
-        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+        const { supabaseAdmin: admin } = await import("@/integrations/supabase/client.server");
+        // courier_* column গুলো generated types.ts-এ নেই — তাই typed client-এ TS error হতো
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const supabaseAdmin = admin as any;
 
         let query = supabaseAdmin.from("orders").select("id").limit(1);
         query = consignmentId
@@ -65,7 +70,10 @@ export const Route = createFileRoute("/api/courier/steadfast-webhook")({
         if (!order) {
           // আমাদের কোনো order নয় (বা মুছে ফেলা হয়েছে) — তবু 200 দিয়ে দিচ্ছি যাতে
           // Steadfast বারবার retry না করে।
-          return jsonResponse(200, { status: "success", message: "Acknowledged (no matching order)." });
+          return jsonResponse(200, {
+            status: "success",
+            message: "Acknowledged (no matching order).",
+          });
         }
 
         // tracking_update-এ status field থাকে না, শুধু tracking_message — শুধু log করি,
@@ -75,7 +83,10 @@ export const Route = createFileRoute("/api/courier/steadfast-webhook")({
             `[steadfast-webhook] tracking update for order ${order.id}:`,
             payload?.tracking_message,
           );
-          return jsonResponse(200, { status: "success", message: "Webhook received successfully." });
+          return jsonResponse(200, {
+            status: "success",
+            message: "Webhook received successfully.",
+          });
         }
 
         const deliveryStatus: string | undefined = payload?.status;

@@ -4,12 +4,51 @@ import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { useCart } from "@/lib/cart";
 import { formatMoney, formatNumber } from "@/lib/format";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Lock, MapPin, ShieldCheck, Truck, Wallet } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { formatSizes } from "@/lib/sizes";
 import { useProducts } from "@/lib/products-store";
 import { checkCoupon, ORDER_LIMITS, placeOrder } from "@/lib/shop.functions";
+import { getAttributionPayload } from "@/lib/attribution";
+
+/**
+ * এক চেকআউট = এক token। "অর্ডার কনফার্ম" দুইবার চাপলে, নেট স্লো হয়ে আবার
+ * চাপলে বা error-এর পরে আবার চেষ্টা করলে — সবসময় একই token যায়, আর server
+ * একই token-এর দ্বিতীয় অর্ডার বানায় না (আগেরটাই ফেরত দেয়)।
+ * অর্ডার সফল হলে token মুছে যায়, পরের অর্ডারে নতুন token।
+ */
+const TOKEN_KEY = "af_checkout_token_v1";
+function newToken(): string {
+  try {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  } catch {
+    /* fall through */
+  }
+  // পুরনো ব্রাউজারের জন্য RFC4122 v4
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+function getCheckoutToken(): string {
+  try {
+    const existing = sessionStorage.getItem(TOKEN_KEY);
+    if (existing) return existing;
+    const t = newToken();
+    sessionStorage.setItem(TOKEN_KEY, t);
+    return t;
+  } catch {
+    return newToken();
+  }
+}
+function clearCheckoutToken() {
+  try {
+    sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
 /**
  * Never show a raw validation payload to a shopper. Server functions now throw
@@ -17,7 +56,8 @@ import { checkCoupon, ORDER_LIMITS, placeOrder } from "@/lib/shop.functions";
  * surface here — anything that looks like JSON gets replaced with plain advice.
  */
 function readableOrderError(err: unknown): string {
-  const fallback = "অর্ডার সম্পন্ন হয়নি। ইন্টারনেট চেক করে আবার চেষ্টা করুন, অথবা ০১৭০৯-৬৮৭৩৮৯ নম্বরে কল করুন।";
+  const fallback =
+    "অর্ডার সম্পন্ন হয়নি। ইন্টারনেট চেক করে আবার চেষ্টা করুন, অথবা ০১৭০৯-৬৮৭৩৮৯ নম্বরে কল করুন।";
   const raw = (err as { message?: unknown })?.message;
   if (typeof raw !== "string" || !raw.trim()) return fallback;
   const message = raw.trim();
@@ -60,6 +100,12 @@ function Checkout() {
   const [couponMsg, setCouponMsg] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [orderError, setOrderError] = useState("");
+  // state আপডেট হওয়ার আগেই দ্রুত দুইবার ক্লিক করলেও দ্বিতীয়টা আটকায়
+  const inFlight = useRef(false);
+  const tokenRef = useRef<string | null>(null);
+  useEffect(() => {
+    tokenRef.current = getCheckoutToken();
+  }, []);
   const total = Math.max(0, subtotal - discount) + shipping;
 
   const [form, setForm] = useState({ name: "", phone: "", address: "", note: "" });
@@ -79,6 +125,8 @@ function Checkout() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (inFlight.current) return;
+    inFlight.current = true;
     setSubmitting(true);
     setOrderError("");
     try {
@@ -95,13 +143,18 @@ function Checkout() {
             quantity,
             sizes: sizes ?? {},
           })),
+          checkoutToken: tokenRef.current ?? getCheckoutToken(),
+          attribution: getAttributionPayload(),
         },
       });
+      clearCheckoutToken();
+      tokenRef.current = null;
       clear();
       navigate({ to: "/thank-you", search: { order: res.id } });
     } catch (err: any) {
       setOrderError(readableOrderError(err));
     } finally {
+      inFlight.current = false;
       setSubmitting(false);
     }
   };

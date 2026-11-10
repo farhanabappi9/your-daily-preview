@@ -27,6 +27,8 @@ import { Route as AdminCategoriesRouteImport } from './routes/admin.categories'
 import { Route as AdminContentRouteImport } from './routes/admin.content'
 import { Route as AdminCouponsRouteImport } from './routes/admin.coupons'
 import { Route as AdminCustomersRouteImport } from './routes/admin.customers'
+import { Route as AdminFacebookPixelRouteImport } from './routes/admin.facebook-pixel'
+import { Route as AdminGtmRouteImport } from './routes/admin.gtm'
 import { Route as AdminInventoryRouteImport } from './routes/admin.inventory'
 import { Route as AdminReportsRouteImport } from './routes/admin.reports'
 import { Route as AdminSettingsRouteImport } from './routes/admin.settings'
@@ -135,6 +137,16 @@ const AdminCustomersRoute = AdminCustomersRouteImport.update({
   path: '/customers',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminFacebookPixelRoute = AdminFacebookPixelRouteImport.update({
+  id: '/facebook-pixel',
+  path: '/facebook-pixel',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminGtmRoute = AdminGtmRouteImport.update({
+  id: '/gtm',
+  path: '/gtm',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminInventoryRoute = AdminInventoryRouteImport.update({
   id: '/inventory',
   path: '/inventory',
@@ -240,6 +252,8 @@ export interface FileRoutesByFullPath {
   '/admin/content': typeof AdminContentRoute
   '/admin/coupons': typeof AdminCouponsRoute
   '/admin/customers': typeof AdminCustomersRoute
+  '/admin/facebook-pixel': typeof AdminFacebookPixelRoute
+  '/admin/gtm': typeof AdminGtmRoute
   '/admin/inventory': typeof AdminInventoryRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -276,6 +290,8 @@ export interface FileRoutesByTo {
   '/admin/content': typeof AdminContentRoute
   '/admin/coupons': typeof AdminCouponsRoute
   '/admin/customers': typeof AdminCustomersRoute
+  '/admin/facebook-pixel': typeof AdminFacebookPixelRoute
+  '/admin/gtm': typeof AdminGtmRoute
   '/admin/inventory': typeof AdminInventoryRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -314,6 +330,8 @@ export interface FileRoutesById {
   '/admin/content': typeof AdminContentRoute
   '/admin/coupons': typeof AdminCouponsRoute
   '/admin/customers': typeof AdminCustomersRoute
+  '/admin/facebook-pixel': typeof AdminFacebookPixelRoute
+  '/admin/gtm': typeof AdminGtmRoute
   '/admin/inventory': typeof AdminInventoryRoute
   '/admin/reports': typeof AdminReportsRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -353,6 +371,8 @@ export interface FileRouteTypes {
     | '/admin/content'
     | '/admin/coupons'
     | '/admin/customers'
+    | '/admin/facebook-pixel'
+    | '/admin/gtm'
     | '/admin/inventory'
     | '/admin/reports'
     | '/admin/settings'
@@ -389,6 +409,8 @@ export interface FileRouteTypes {
     | '/admin/content'
     | '/admin/coupons'
     | '/admin/customers'
+    | '/admin/facebook-pixel'
+    | '/admin/gtm'
     | '/admin/inventory'
     | '/admin/reports'
     | '/admin/settings'
@@ -426,6 +448,8 @@ export interface FileRouteTypes {
     | '/admin/content'
     | '/admin/coupons'
     | '/admin/customers'
+    | '/admin/facebook-pixel'
+    | '/admin/gtm'
     | '/admin/inventory'
     | '/admin/reports'
     | '/admin/settings'
@@ -596,6 +620,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminCustomersRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/facebook-pixel': {
+      id: '/admin/facebook-pixel'
+      path: '/facebook-pixel'
+      fullPath: '/admin/facebook-pixel'
+      preLoaderRoute: typeof AdminFacebookPixelRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/gtm': {
+      id: '/admin/gtm'
+      path: '/gtm'
+      fullPath: '/admin/gtm'
+      preLoaderRoute: typeof AdminGtmRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/inventory': {
       id: '/admin/inventory'
       path: '/inventory'
@@ -724,6 +762,8 @@ interface AdminRouteChildren {
   AdminContentRoute: typeof AdminContentRoute
   AdminCouponsRoute: typeof AdminCouponsRoute
   AdminCustomersRoute: typeof AdminCustomersRoute
+  AdminFacebookPixelRoute: typeof AdminFacebookPixelRoute
+  AdminGtmRoute: typeof AdminGtmRoute
   AdminInventoryRoute: typeof AdminInventoryRoute
   AdminReportsRoute: typeof AdminReportsRoute
   AdminSettingsRoute: typeof AdminSettingsRoute
@@ -743,6 +783,8 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminContentRoute: AdminContentRoute,
   AdminCouponsRoute: AdminCouponsRoute,
   AdminCustomersRoute: AdminCustomersRoute,
+  AdminFacebookPixelRoute: AdminFacebookPixelRoute,
+  AdminGtmRoute: AdminGtmRoute,
   AdminInventoryRoute: AdminInventoryRoute,
   AdminReportsRoute: AdminReportsRoute,
   AdminSettingsRoute: AdminSettingsRoute,

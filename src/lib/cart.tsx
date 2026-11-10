@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import type { Product } from "./products";
 import { trackAddToCart } from "./pixel";
 import { ttAddToCart } from "./tiktok-pixel";
+import { gtmAddToCart } from "./gtm";
 import { sizeSignature } from "./sizes";
 
 export type CartItem = {
@@ -55,6 +56,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
     trackAddToCart({ slug: p.slug, name: p.name, price: p.price, quantity: qty });
     // TikTok Pixel — একই জায়গা থেকে, Meta-র পাশাপাশি (একটা ব্যর্থ হলেও অন্যটা চলবে)
     ttAddToCart({ slug: p.slug, name: p.name, price: p.price, quantity: qty });
+    // Google Tag Manager (dataLayer) — GTM ID সেট না থাকলে কিছুই হয় না
+    gtmAddToCart({ slug: p.slug, name: p.name, price: p.price, quantity: qty });
 
     const key = itemKey(p, sizes);
     setItems((prev) => {

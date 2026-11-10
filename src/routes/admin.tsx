@@ -22,7 +22,8 @@ import {
   LineChart,
   ShieldCheck,
   Music2,
-
+  Facebook,
+  Tags,
 } from "lucide-react";
 
 export const Route = createFileRoute("/admin")({
@@ -49,9 +50,10 @@ const NAV: { to: any; label: string; icon: any; exact?: boolean }[] = [
   { to: "/admin/reports", label: "Reports", icon: LineChart },
   { to: "/admin/content", label: "Content & Invoice", icon: FileText },
   { to: "/admin/users", label: "Users & Roles", icon: ShieldCheck },
+  { to: "/admin/facebook-pixel", label: "Facebook Pixel", icon: Facebook },
   { to: "/admin/tiktok-pixel", label: "TikTok Pixel", icon: Music2 },
+  { to: "/admin/gtm", label: "Google Tag Manager", icon: Tags },
   { to: "/admin/settings", label: "Settings", icon: SettingsIcon },
-
 ];
 
 function AdminLayout() {
@@ -85,7 +87,6 @@ function AdminLayout() {
     return (
       <NotAdmin email={session.user.email} setupMissing={roleQuery.data?.setupMissing ?? true} />
     );
-
 
   return (
     <div className="flex min-h-screen w-full bg-muted/30">
@@ -210,7 +211,6 @@ function SetupSqlPanel() {
       </button>
     </div>
   );
-
 }
 
 function AdminLogin() {
@@ -356,4 +356,3 @@ function AdminLogin() {
     </div>
   );
 }
-

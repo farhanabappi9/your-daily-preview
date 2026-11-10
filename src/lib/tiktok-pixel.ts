@@ -228,17 +228,19 @@ export function ttInitiateCheckout(cart: {
 export function ttCompletePayment(order: {
   orderNo: string;
   value: number;
-  items: { name: string; quantity: number }[];
+  items: { id?: string; name: string; quantity: number; price?: number }[];
 }): void {
   send(
     "CompletePayment",
     {
       contents: order.items.map((i) => ({
-        content_id: i.name,
+        content_id: i.id ?? i.name,
         content_name: i.name,
         content_type: "product",
         quantity: i.quantity,
+        price: i.price,
       })),
+      order_id: order.orderNo,
       content_type: "product",
       value: order.value,
       currency: "BDT",

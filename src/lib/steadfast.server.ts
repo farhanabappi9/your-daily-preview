@@ -38,9 +38,7 @@ async function steadfastFetch<T>(path: string, init?: RequestInit): Promise<T> {
     });
   } catch (networkError: any) {
     // fetch() itself threw — DNS/TLS/connection failure, not an HTTP error.
-    throw new Error(
-      `Could not reach Steadfast (${url}): ${networkError?.message ?? networkError}`,
-    );
+    throw new Error(`Could not reach Steadfast (${url}): ${networkError?.message ?? networkError}`);
   }
   const text = await res.text();
   let body: any;
@@ -70,8 +68,11 @@ export type SteadfastOrderInput = {
   recipient_name: string;
   recipient_phone: string;
   recipient_address: string;
+  /** টাকার অঙ্ক (number) — পণ্যের দাম + ডেলিভারি চার্জ − ডিসকাউন্ট। কখনো string নয়। */
   cod_amount: number;
   note?: string;
+  /** পার্সেলে কী আছে — Steadfast প্যানেলে দেখা যায় */
+  item_description?: string;
 };
 
 export type SteadfastConsignment = {
@@ -94,13 +95,34 @@ export type SteadfastCreateOrderResponse = {
   consignment: SteadfastConsignment;
 };
 
+/** cod_amount সবসময় পূর্ণ সংখ্যা (number) হিসেবে যায় — string/NaN/negative হলে ধরা পড়ে। */
+function sanitizeOrder(order: SteadfastOrderInput): SteadfastOrderInput {
+  const cod = Math.round(Number(order.cod_amount));
+  if (!Number.isFinite(cod) || cod < 0) {
+    throw new Error(`COD amount সঠিক নয় (${order.invoice}): ${order.cod_amount}`);
+  }
+  const clean: SteadfastOrderInput = { ...order, cod_amount: cod };
+  if (!clean.note) delete clean.note;
+  if (!clean.item_description) delete clean.item_description;
+  return clean;
+}
+
 export async function createSteadfastOrder(
   order: SteadfastOrderInput,
 ): Promise<SteadfastCreateOrderResponse> {
-  return steadfastFetch<SteadfastCreateOrderResponse>("/create_order", {
+  const body = await steadfastFetch<SteadfastCreateOrderResponse>("/create_order", {
     method: "POST",
-    body: JSON.stringify(order),
+    body: JSON.stringify(sanitizeOrder(order)),
   });
+  // Steadfast কখনো কখনো HTTP 200 দিয়েও body-তে status 400/422 ফেরত দেয়
+  if (!body?.consignment?.consignment_id) {
+    const msg = (body as { message?: string; errors?: unknown })?.message;
+    const errs = (body as { errors?: unknown })?.errors;
+    throw new Error(
+      `Steadfast অর্ডার নেয়নি: ${msg ?? ""} ${errs ? JSON.stringify(errs) : ""}`.trim(),
+    );
+  }
+  return body;
 }
 
 export type SteadfastBulkOrderResult = {
@@ -113,7 +135,7 @@ export type SteadfastBulkOrderResult = {
   consignment_id?: number;
   tracking_code?: string;
   status: "success" | "error";
-  errors?: unknown;
+  errors?: string[] | Record<string, string[]> | string | null;
 };
 
 export async function createSteadfastBulkOrder(
@@ -125,7 +147,7 @@ export async function createSteadfastBulkOrder(
   }
   const body = await steadfastFetch<{ data: SteadfastBulkOrderResult[] }>(
     "/create_order/bulk_order",
-    { method: "POST", body: JSON.stringify({ data: orders }) },
+    { method: "POST", body: JSON.stringify({ data: orders.map(sanitizeOrder) }) },
   );
   return body.data ?? [];
 }
@@ -157,4 +179,3 @@ export function verifySteadfastWebhookToken(authorizationHeader: string | null):
   const token = authorizationHeader.replace(/^Bearer\s+/i, "").trim();
   return token === expected;
 }
-

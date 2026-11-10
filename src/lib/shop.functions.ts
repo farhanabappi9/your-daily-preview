@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { DbBanner, DbCategory, DbProduct, ShopSettings } from "./shop-types";
 import { DEFAULT_SETTINGS } from "./shop-types";
 import { publicClient, serviceKeyProblem } from "./shop.server";
+import { detectOrderSource, normalizeBdPhone } from "./order-source";
 
 export const getStorefront = createServerFn({ method: "GET" }).handler(async () => {
   let db: ReturnType<typeof publicClient>;
@@ -102,6 +103,42 @@ const sizeSuffix = (sizes?: Record<string, string>) =>
 /** Maximum lengths — keep these in sync with the `maxLength` props in checkout.tsx. */
 export const ORDER_LIMITS = { name: 100, phone: 20, address: 500, note: 500, coupon: 40 } as const;
 
+const s200 = z.string().trim().max(200).optional();
+const s500 = z.string().trim().max(500).optional();
+const touchSchema = z
+  .object({
+    utm_source: s200,
+    utm_medium: s200,
+    utm_campaign: s200,
+    utm_content: s200,
+    utm_term: s200,
+    ttclid: s500,
+    fbclid: s500,
+    gclid: s500,
+    gbraid: s500,
+    wbraid: s500,
+    referrer: s500,
+    landing_page: s500,
+    ts: z.string().max(40).optional(),
+  })
+  .partial();
+
+/**
+ * কোথা থেকে এসেছে (utm / click id / referrer / pixel cookie)। ভুল বা বড় ডেটা
+ * এলে `.catch(undefined)` — অর্থাৎ tracking ডেটার কারণে কখনো অর্ডার আটকাবে না।
+ */
+const attributionSchema = touchSchema
+  .extend({
+    first_source_touch: touchSchema.optional(),
+    fbp: s200,
+    fbc: s500,
+    ttp: s200,
+    ga_client_id: z.string().trim().max(100).optional(),
+    page_url: s500,
+  })
+  .optional()
+  .catch(undefined);
+
 const orderInput = z.object({
   name: z.string().trim().min(2).max(ORDER_LIMITS.name),
   phone: z.string().trim().min(6).max(ORDER_LIMITS.phone),
@@ -119,6 +156,9 @@ const orderInput = z.object({
     )
     .min(1)
     .max(50),
+  /** চেকআউট পেজে একবার তৈরি হওয়া ID — একই ID দিয়ে দ্বিতীয় অর্ডার ঢোকে না। */
+  checkoutToken: z.string().uuid().optional().catch(undefined),
+  attribution: attributionSchema,
 });
 
 const FIELD_LABEL: Record<string, string> = {
@@ -161,13 +201,63 @@ function friendlyOrderError(error: z.ZodError): string {
   }
 }
 
+type PlacedOrder = {
+  id: string;
+  orderNo: string;
+  total: number;
+  subtotal: number;
+  shipping: number;
+  discount: number;
+  /** true হলে নতুন অর্ডার তৈরি হয়নি — আগের একই অর্ডারটাই ফেরত দেওয়া হয়েছে */
+  duplicate: boolean;
+};
+
+function toPlaced(row: any, duplicate: boolean): PlacedOrder {
+  return {
+    id: row.id as string,
+    orderNo: row.order_no as string,
+    total: Number(row.total),
+    subtotal: Number(row.subtotal),
+    shipping: Number(row.shipping),
+    discount: Number(row.discount),
+    duplicate,
+  };
+}
+
+const PLACED_COLUMNS = "id, order_no, total, subtotal, shipping, discount";
+
+/** নতুন column গুলো এখনো DB-তে না থাকলে (SQL চালানো হয়নি) যে error আসে। */
+function isMissingColumnError(err: { code?: string; message?: string } | null | undefined) {
+  if (!err) return false;
+  return (
+    err.code === "42703" ||
+    err.code === "PGRST204" ||
+    /column .* does not exist|could not find the .* column/i.test(err.message ?? "")
+  );
+}
+
+/** একই পণ্য + একই পরিমাণ কি না — ডুপ্লিকেট চেকের জন্য। */
+function itemsSignature(items: { product_id: string; quantity: number }[]): string {
+  return items
+    .map((i) => `${i.product_id}:${i.quantity}`)
+    .sort()
+    .join("|");
+}
+
+/** একই কাস্টমার এই সময়ের মধ্যে হুবহু একই অর্ডার দিলে নতুন অর্ডার না বানিয়ে আগেরটা ফেরত। */
+const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
+
 export const placeOrder = createServerFn({ method: "POST" })
   .inputValidator((d: z.input<typeof orderInput>) => {
     const parsed = orderInput.safeParse(d);
     if (!parsed.success) throw new Error(friendlyOrderError(parsed.error));
-    return parsed.data;
+    const phone = normalizeBdPhone(parsed.data.phone);
+    if (!phone) {
+      throw new Error("সঠিক ১১ ডিজিটের মোবাইল নম্বর দিন (যেমন 01712345678)।");
+    }
+    return { ...parsed.data, phone };
   })
-  .handler(async ({ data }) => {
+  .handler(async ({ data }): Promise<PlacedOrder> => {
     // Fail fast (and loudly in the logs) if the "service role" key is really the
     // anon key — that is what makes the `orders` insert get rejected.
     const keyProblem = serviceKeyProblem();
@@ -175,6 +265,19 @@ export const placeOrder = createServerFn({ method: "POST" })
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const db = supabaseAdmin as any;
+
+    // ---- ১. একই checkout token আগে এসেছে? (ডাবল ক্লিক / নেটওয়ার্ক রিট্রাই) ----
+    if (data.checkoutToken) {
+      const { data: existing, error: tokenError } = await db
+        .from("orders")
+        .select(PLACED_COLUMNS)
+        .eq("checkout_token", data.checkoutToken)
+        .maybeSingle();
+      if (existing) return toPlaced(existing, true);
+      if (tokenError && !isMissingColumnError(tokenError)) {
+        console.error("[order] checkout token lookup failed:", tokenError.message);
+      }
+    }
 
     const slugs = data.items.map((i) => i.slug);
     const { data: products, error: lookupError } = await db
@@ -188,7 +291,9 @@ export const placeOrder = createServerFn({ method: "POST" })
     }
     const list = (products ?? []) as DbProduct[];
     if (!list.length) {
-      throw new Error("কার্টের পণ্যগুলো এখন আর পাওয়া যাচ্ছে না। পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।");
+      throw new Error(
+        "কার্টের পণ্যগুলো এখন আর পাওয়া যাচ্ছে না। পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।",
+      );
     }
 
     const items = data.items
@@ -212,7 +317,9 @@ export const placeOrder = createServerFn({ method: "POST" })
     }[];
 
     if (!items.length) {
-      throw new Error("কার্টের পণ্যগুলো এখন আর পাওয়া যাচ্ছে না। পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।");
+      throw new Error(
+        "কার্টের পণ্যগুলো এখন আর পাওয়া যাচ্ছে না। পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।",
+      );
     }
 
     const subtotal = items.reduce((s, i) => s + i.price * i.quantity, 0);
@@ -228,6 +335,7 @@ export const placeOrder = createServerFn({ method: "POST" })
     };
     let shipping =
       data.area === "inside" ? Number(settings.shippingInside) : Number(settings.shippingOutside);
+    if (!Number.isFinite(shipping) || shipping < 0) shipping = 0;
     if (settings.freeShippingOver > 0 && subtotal >= settings.freeShippingOver) shipping = 0;
 
     // Coupon is only *validated* here. used_count is incremented AFTER the order
@@ -242,16 +350,16 @@ export const placeOrder = createServerFn({ method: "POST" })
         .ilike("code", data.couponCode)
         .eq("active", true)
         .maybeSingle();
-      if (
+      const valid =
         c &&
         (!c.expires_at || new Date(c.expires_at) >= new Date()) &&
-        subtotal >= Number(c.min_order)
-      ) {
+        subtotal >= Number(c.min_order);
+      if (valid) {
         discount = Math.min(
+          subtotal,
           c.type === "percent"
             ? Math.round((subtotal * Number(c.value)) / 100)
             : Math.round(Number(c.value)),
-          subtotal,
         );
         couponCode = c.code;
         couponRow = c;
@@ -259,6 +367,52 @@ export const placeOrder = createServerFn({ method: "POST" })
     }
 
     const total = Math.max(0, subtotal - discount) + shipping;
+
+    // ---- ২. একই ফোন থেকে কয়েক মিনিটের মধ্যে হুবহু একই অর্ডার? ----
+    {
+      const since = new Date(Date.now() - DUPLICATE_WINDOW_MS).toISOString();
+      const { data: recent } = await db
+        .from("orders")
+        .select(`${PLACED_COLUMNS}, status, order_items(product_id, quantity)`)
+        .eq("phone", data.phone)
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(5);
+      const sig = itemsSignature(items);
+      const dup = (recent ?? []).find(
+        (o: any) =>
+          o.status !== "cancelled" &&
+          Number(o.total) === total &&
+          itemsSignature(o.order_items ?? []) === sig,
+      );
+      if (dup) {
+        console.log("[order] duplicate submit ignored, returning", dup.order_no);
+        return toPlaced(dup, true);
+      }
+    }
+
+    // ---- ৩. সোর্স (TikTok / Facebook / Google …) ----
+    const { getRequestHeader, getRequest } = await import("@tanstack/react-start/server");
+    const userAgent = (getRequestHeader("user-agent") ?? "").slice(0, 400);
+    const ip =
+      getRequestHeader("cf-connecting-ip") ??
+      getRequestHeader("x-real-ip") ??
+      (getRequestHeader("x-forwarded-for") ?? "").split(",")[0]?.trim() ??
+      "";
+    const attr = data.attribution ?? {};
+    const detected = detectOrderSource({ ...attr, user_agent: userAgent });
+    const {
+      fbp: _fbp,
+      fbc: _fbc,
+      ttp: _ttp,
+      ga_client_id: _ga,
+      ...attributionToStore
+    } = attr as Record<string, unknown>;
+    void _fbp;
+    void _fbc;
+    void _ttp;
+    void _ga;
+
     // 8 digits of the clock + 3 random digits — avoids UNIQUE(order_no) clashes
     // when two customers order within the same millisecond.
     const orderNo =
@@ -268,30 +422,66 @@ export const placeOrder = createServerFn({ method: "POST" })
         .toString()
         .padStart(3, "0");
 
-    const { data: order, error } = await db
+    const baseRow = {
+      order_no: orderNo,
+      customer_name: data.name,
+      phone: data.phone,
+      address: data.address,
+      note: data.note || null,
+      area: data.area,
+      subtotal,
+      shipping,
+      discount,
+      total,
+      coupon_code: couponCode,
+      status: "pending",
+      payment_method: "cod",
+      payment_status: "unpaid",
+    };
+    const trackingRow = {
+      source: detected.source,
+      source_medium: detected.medium,
+      attribution: { ...attributionToStore, detected_by: detected.reason },
+      checkout_token: data.checkoutToken ?? null,
+      user_agent: userAgent || null,
+    };
+
+    let insert = await db
       .from("orders")
-      .insert({
-        order_no: orderNo,
-        customer_name: data.name,
-        phone: data.phone,
-        address: data.address,
-        note: data.note || null,
-        area: data.area,
-        subtotal,
-        shipping,
-        discount,
-        total,
-        coupon_code: couponCode,
-        status: "pending",
-      })
-      .select("id, order_no")
+      .insert({ ...baseRow, ...trackingRow })
+      .select(PLACED_COLUMNS)
       .single();
-    if (error) {
+
+    // নতুন SQL এখনো চালানো না হলেও অর্ডার যেন না আটকায়
+    if (insert.error && isMissingColumnError(insert.error)) {
+      console.error(
+        "[order] source/checkout_token column নেই — supabase/migrations/20261110120000_order_source_tracking.sql চালান। সোর্স ছাড়াই অর্ডার সেভ করা হলো।",
+      );
+      insert = await db.from("orders").insert(baseRow).select(PLACED_COLUMNS).single();
+    }
+
+    // একই token দিয়ে একসাথে দুইটা request এসেছিল — অন্যটা আগে সেভ হয়ে গেছে
+    if (insert.error?.code === "23505" && data.checkoutToken) {
+      const { data: existing } = await db
+        .from("orders")
+        .select(PLACED_COLUMNS)
+        .eq("checkout_token", data.checkoutToken)
+        .maybeSingle();
+      if (existing) return toPlaced(existing, true);
+    }
+
+    const { data: order, error } = insert;
+    if (error || !order) {
       // Full detail goes to the server log (wrangler tail / Cloudflare Logs);
       // the customer only sees the friendly sentence.
       console.error(
         "[order] insert failed:",
-        JSON.stringify({ code: error.code, message: error.message, details: error.details, hint: error.hint }),
+        JSON.stringify({
+          code: error?.code,
+          message: error?.message,
+          details: error?.details,
+          hint: error?.hint,
+        }),
         keyProblem ? `| LIKELY CAUSE: ${keyProblem}` : "",
       );
       throw new Error("অর্ডার সংরক্ষণ করা যায়নি। একটু পরে আবার চেষ্টা করুন অথবা আমাদের কল করুন।");
@@ -330,14 +520,58 @@ export const placeOrder = createServerFn({ method: "POST" })
       if (stockError) console.error("[order] stock update failed:", p.slug, stockError.message);
     }
 
-    return {
-      id: order.id as string,
-      orderNo: order.order_no as string,
-      total,
-      subtotal,
-      shipping,
-      discount,
-    };
+    // ---- ৪. Server-side purchase event (Facebook CAPI / TikTok Events API / GA4) ----
+    // key সেট না থাকলে কিছুই হয় না। কোনো error অর্ডারকে প্রভাবিত করে না।
+    try {
+      const { data: secretRow } = await db
+        .from("private_settings")
+        .select("value")
+        .eq("key", "tracking")
+        .maybeSingle();
+      const secrets = (secretRow?.value ??
+        {}) as import("./server-tracking.server").TrackingSecrets;
+      if (secrets.metaCapiToken || secrets.tiktokAccessToken || secrets.ga4ApiSecret) {
+        const { sendServerPurchaseEvents, findWaitUntil } =
+          await import("./server-tracking.server");
+        const job = sendServerPurchaseEvents(settings, secrets, {
+          orderNo: order.order_no,
+          value: total,
+          shipping,
+          phone: data.phone,
+          name: data.name,
+          items: items.map((i) => {
+            const p = list.find((x) => x.id === i.product_id);
+            return {
+              id: p?.slug ?? i.product_id,
+              name: i.name,
+              price: i.price,
+              quantity: i.quantity,
+            };
+          }),
+          ip: ip || undefined,
+          userAgent: userAgent || undefined,
+          pageUrl: (attr.page_url as string | undefined) ?? undefined,
+          referrer: (attr.referrer as string | undefined) ?? undefined,
+          fbp: attr.fbp,
+          fbc: attr.fbc,
+          ttp: attr.ttp,
+          ttclid: attr.ttclid,
+          gaClientId: attr.ga_client_id,
+        }).then(async (result) => {
+          await db
+            .from("orders")
+            .update({ server_events: { ...result, at: new Date().toISOString() } })
+            .eq("id", order.id);
+        });
+        const waitUntil = findWaitUntil(getRequest());
+        if (waitUntil) waitUntil(job.catch(() => {}));
+        else await Promise.race([job.catch(() => {}), new Promise((r) => setTimeout(r, 3500))]);
+      }
+    } catch (e: any) {
+      console.error("[order] server-side tracking skipped:", e?.message ?? e);
+    }
+
+    return toPlaced(order, false);
   });
 
 export const getOrderReceipt = createServerFn({ method: "GET" })

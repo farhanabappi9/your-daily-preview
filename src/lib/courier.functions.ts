@@ -1,6 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { computeCodAmount } from "./cod";
+import { normalizeBdPhone } from "./order-source";
 
 type OrderForCourier = {
   id: string;
@@ -16,76 +18,76 @@ type OrderForCourier = {
   payment_method: string | null;
   payment_status: string | null;
   courier_consignment_id: string | null;
+  order_items?: { name: string; quantity: number }[] | null;
 };
 
 // orders টেবিল থেকে Steadfast-এর জন্য যা যা দরকার সব এক জায়গায় — দুই জায়গায় select আলাদা
 // লিখলে একটায় column বাদ পড়ে যায়, তাই একটাই const।
 const ORDER_COURIER_COLUMNS =
-  "id, order_no, customer_name, phone, address, note, subtotal, shipping, discount, total, payment_method, payment_status, courier_consignment_id";
+  "id, order_no, customer_name, phone, address, note, subtotal, shipping, discount, total, payment_method, payment_status, courier_consignment_id, order_items(name, quantity)";
 
-// এই payment method গুলো অনলাইনে আগেই পেমেন্ট হয়ে যায় — এগুলোতে কুরিয়ারের COD = 0।
-// বাকি সব (cod, COD, "Cash on Delivery", খালি/null ...) COD হিসেবে ধরা হবে।
-const PREPAID_METHODS = new Set([
-  "bkash",
-  "nagad",
-  "rocket",
-  "upay",
-  "card",
-  "online",
-  "bank",
-  "sslcommerz",
-  "stripe",
-  "paypal",
-  "prepaid",
-]);
+/** JSON-safe (server function থেকে ফেরত দেওয়া যায় এমন) bulk ফলাফল। */
+type BulkResultRow = {
+  invoice: string;
+  status: "success" | "error";
+  cod_amount: number;
+  consignment_id: number | null;
+  tracking_code: string | null;
+  error: string | null;
+};
 
-function resolveOrderTotal(order: OrderForCourier): number {
-  const total = Number(order.total);
-  if (Number.isFinite(total) && total > 0) return Math.round(total);
-  // total কোনো কারণে 0/null হলে subtotal - discount + shipping থেকে হিসাব করি।
-  const subtotal = Number(order.subtotal ?? 0);
-  const shipping = Number(order.shipping ?? 0);
-  const discount = Number(order.discount ?? 0);
-  const computed = Math.max(0, subtotal - discount) + shipping;
-  return Number.isFinite(computed) ? Math.round(computed) : 0;
+function itemDescription(order: OrderForCourier): string | undefined {
+  const text = (order.order_items ?? [])
+    .map((i) => `${i.name} x${i.quantity}`)
+    .join(", ")
+    .slice(0, 250);
+  return text || undefined;
 }
 
-function computeCodAmount(order: OrderForCourier): number {
-  // আগে ছিল: payment_method === "cod" ? total : 0
-  // সমস্যা: "COD" / "Cash on Delivery" / null হলে exact match মিলত না, ফলে 0 যেত।
-  const method = String(order.payment_method ?? "").trim().toLowerCase();
-  const status = String(order.payment_status ?? "").trim().toLowerCase();
-
-  if (status === "paid") return 0; // আগেই পেমেন্ট হয়ে গেছে, ক্যাশ নেওয়ার কিছু নেই
-  if (PREPAID_METHODS.has(method)) return 0;
-  return resolveOrderTotal(order);
-}
-
-function buildSteadfastPayload(order: OrderForCourier) {
-  const codAmount = computeCodAmount(order);
+/**
+ * Steadfast-এ যা যাবে। COD হিসাব `cod.ts`-এ — admin প্যানেলেও ঠিক একই ফাংশন
+ * দিয়ে "COD যাবে ৳X" দেখানো হয়।
+ *
+ * codOverride: admin অর্ডার পেজ থেকে নিজে টাকার পরিমাণ বসালে সেটাই যায়।
+ */
+function buildSteadfastPayload(order: OrderForCourier, codOverride?: number) {
+  const codAmount =
+    codOverride !== undefined && Number.isFinite(codOverride) && codOverride >= 0
+      ? Math.round(codOverride)
+      : computeCodAmount(order);
+  const phone = normalizeBdPhone(order.phone) ?? order.phone;
   console.log(
     "[steadfast] payload cod_amount:",
     JSON.stringify({
       order_no: order.order_no,
+      total: order.total,
       payment_method: order.payment_method,
       payment_status: order.payment_status,
-      total: order.total,
+      override: codOverride ?? null,
       cod_amount: codAmount,
     }),
   );
   return {
     invoice: order.order_no,
     recipient_name: order.customer_name,
-    recipient_phone: order.phone,
-    recipient_address: order.address,
+    recipient_phone: phone,
+    recipient_address: order.address.slice(0, 250),
     cod_amount: codAmount,
     note: order.note ?? undefined,
+    item_description: itemDescription(order),
   };
 }
 
 export const sendOrderToCourier = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { id: string }) => z.object({ id: z.string().uuid() }).parse(d))
+  .inputValidator((d: { id: string; codAmount?: number }) =>
+    z
+      .object({
+        id: z.string().uuid(),
+        codAmount: z.number().min(0).max(1_000_000).optional(),
+      })
+      .parse(d),
+  )
   .handler(async ({ data, context }) => {
     const db = context.supabase as any;
     const { data: order, error } = await db
@@ -99,11 +101,26 @@ export const sendOrderToCourier = createServerFn({ method: "POST" })
       throw new Error("এই অর্ডারটি আগেই Steadfast-এ পাঠানো হয়েছে।");
     }
 
+    const payload = buildSteadfastPayload(order as OrderForCourier, data.codAmount);
+    if (payload.cod_amount === 0 && Number(order.total) > 0 && data.codAmount === undefined) {
+      // নিরাপত্তা: ভুল করে ৳0 যেন না যায় — admin নিজে 0 বসালে তবেই যাবে
+      return {
+        ok: false as const,
+        error:
+          "COD ৳0 হিসাব হচ্ছে (অর্ডারটি অনলাইনে paid মার্ক করা)। সত্যিই ৳0 পাঠাতে চাইলে COD ঘরে 0 লিখে পাঠান।",
+      };
+    }
+
     const { createSteadfastOrder } = await import("@/lib/steadfast.server");
 
     try {
-      const result = await createSteadfastOrder(buildSteadfastPayload(order));
+      const result = await createSteadfastOrder(payload);
       const c = result.consignment;
+      const returnedCod = Number(c.cod_amount);
+      const mismatch =
+        Number.isFinite(returnedCod) && returnedCod !== payload.cod_amount
+          ? `সতর্কতা: পাঠানো হয়েছে ৳${payload.cod_amount}, Steadfast দেখাচ্ছে ৳${returnedCod}`
+          : null;
       const { error: updateError } = await db
         .from("orders")
         .update({
@@ -113,11 +130,20 @@ export const sendOrderToCourier = createServerFn({ method: "POST" })
           courier_status: c.status,
           courier_sent_at: new Date().toISOString(),
           courier_last_synced_at: new Date().toISOString(),
-          courier_error: null,
+          courier_error: mismatch,
         })
         .eq("id", data.id);
       if (updateError) throw new Error(updateError.message);
-      return { ok: true as const, consignment: c };
+      return {
+        ok: true as const,
+        codAmount: payload.cod_amount,
+        warning: mismatch,
+        consignment: {
+          consignment_id: c.consignment_id,
+          tracking_code: c.tracking_code,
+          status: c.status,
+        },
+      };
     } catch (e: any) {
       const message = String(e?.message ?? e);
       await db.from("orders").update({ courier_error: message }).eq("id", data.id);
@@ -138,22 +164,25 @@ export const bulkSendOrdersToCourier = createServerFn({ method: "POST" })
       .in("id", data.ids);
     if (error) throw new Error(error.message);
 
-    const eligible = (orders ?? []).filter((o: OrderForCourier) => !o.courier_consignment_id);
-    const alreadySent = (orders ?? []).length - eligible.length;
+    const all = (orders ?? []) as OrderForCourier[];
+    const eligible = all.filter((o) => !o.courier_consignment_id);
+    const alreadySent = all.length - eligible.length;
     if (eligible.length === 0) {
-      return { ok: true as const, sent: 0, failed: 0, alreadySent, results: [] };
+      return { ok: true as const, sent: 0, failed: 0, alreadySent, results: [] as BulkResultRow[] };
     }
 
     const { createSteadfastBulkOrder } = await import("@/lib/steadfast.server");
-    const payload = eligible.map(buildSteadfastPayload);
-    const results = await createSteadfastBulkOrder(payload);
+    const payload = eligible.map((o) => buildSteadfastPayload(o));
+    const codByInvoice = new Map(payload.map((p) => [p.invoice, p.cod_amount]));
+    const raw = await createSteadfastBulkOrder(payload);
 
-    const byInvoice = new Map(eligible.map((o: OrderForCourier) => [o.order_no, o]));
+    const byInvoice = new Map(eligible.map((o) => [o.order_no, o]));
     let sent = 0;
     let failed = 0;
     const now = new Date().toISOString();
+    const results: BulkResultRow[] = [];
 
-    for (const r of results) {
+    for (const r of raw) {
       const order = byInvoice.get(r.invoice);
       if (!order) continue;
       if (r.status === "success" && r.consignment_id && r.tracking_code) {
@@ -164,18 +193,32 @@ export const bulkSendOrdersToCourier = createServerFn({ method: "POST" })
             courier_provider: "steadfast",
             courier_consignment_id: String(r.consignment_id),
             courier_tracking_code: r.tracking_code,
-            courier_status: "pending",
+            courier_status: "in_review",
             courier_sent_at: now,
             courier_last_synced_at: now,
             courier_error: null,
           })
           .eq("id", order.id);
+        results.push({
+          invoice: r.invoice,
+          status: "success",
+          cod_amount: codByInvoice.get(r.invoice) ?? 0,
+          consignment_id: r.consignment_id,
+          tracking_code: r.tracking_code,
+          error: null,
+        });
       } else {
         failed++;
-        await db
-          .from("orders")
-          .update({ courier_error: JSON.stringify(r.errors ?? "unknown error") })
-          .eq("id", order.id);
+        const msg = JSON.stringify(r.errors ?? "unknown error").slice(0, 500);
+        await db.from("orders").update({ courier_error: msg }).eq("id", order.id);
+        results.push({
+          invoice: r.invoice,
+          status: "error",
+          cod_amount: codByInvoice.get(r.invoice) ?? 0,
+          consignment_id: null,
+          tracking_code: null,
+          error: msg,
+        });
       }
     }
 
@@ -197,9 +240,8 @@ export const refreshCourierStatus = createServerFn({ method: "POST" })
       throw new Error("এই অর্ডারটি এখনো Steadfast-এ পাঠানো হয়নি।");
     }
 
-    const { getSteadfastStatusByConsignmentId, mapSteadfastStatusToOrderStatus } = await import(
-      "@/lib/steadfast.server"
-    );
+    const { getSteadfastStatusByConsignmentId, mapSteadfastStatusToOrderStatus } =
+      await import("@/lib/steadfast.server");
     const result = await getSteadfastStatusByConsignmentId(order.courier_consignment_id);
 
     const patch: Record<string, unknown> = {

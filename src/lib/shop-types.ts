@@ -110,6 +110,11 @@ export type DbOrder = {
   payment_status: string;
   tracking_note: string | null;
   admin_note: string | null;
+  /** tiktok | facebook | instagram | google | youtube | other | direct — পুরনো অর্ডারে null */
+  source?: string | null;
+  source_medium?: string | null;
+  attribution?: Record<string, unknown> | null;
+  checkout_token?: string | null;
   created_at: string;
   updated_at: string;
   order_items?: DbOrderItem[];
@@ -163,6 +168,20 @@ export type ShopSettings = {
   /** TikTok Pixel — admin panel থেকে সেট হয়, কোডে hardcode নেই */
   tiktokPixelId?: string;
   tiktokPixelEnabled?: boolean;
+  /**
+   * Facebook (Meta) Pixel — Admin → Facebook Pixel পেজ থেকে সেট হয়।
+   * undefined মানে কখনো সেভ করা হয়নি → আগের hardcoded ID (LEGACY_META_PIXEL_ID) চলে,
+   * যাতে আপডেটের পরে ট্র্যাকিং এক মুহূর্তের জন্যও বন্ধ না হয়।
+   */
+  metaPixelId?: string;
+  metaPixelEnabled?: boolean;
+  /** Google Tag Manager — Admin → Google Tag Manager পেজ থেকে */
+  gtmId?: string;
+  gtmEnabled?: boolean;
+  /** Server-side GTM (Stape/নিজের server) URL, যেমন https://sgtm.yourdomain.com — খালি হলে Google-এর নিজস্ব */
+  gtmServerUrl?: string;
+  /** GA4 Measurement ID (G-XXXX) — server থেকে purchase পাঠাতে (API secret আলাদা গোপন জায়গায় থাকে) */
+  ga4MeasurementId?: string;
   shippingInside: number;
   shippingOutside: number;
   freeShippingOver: number;
@@ -205,6 +224,11 @@ export const DEFAULT_SETTINGS: ShopSettings = {
   instagram: "",
   tiktokPixelId: "",
   tiktokPixelEnabled: true,
+  metaPixelEnabled: true,
+  gtmId: "",
+  gtmEnabled: true,
+  gtmServerUrl: "",
+  ga4MeasurementId: "",
   shippingInside: 70,
   shippingOutside: 130,
   freeShippingOver: 0,

@@ -6,6 +6,8 @@ import { sendOrderToCourier, refreshCourierStatus } from "@/lib/courier.function
 import { formatBDT } from "@/lib/products";
 import { ArrowLeft, Printer, Trash2, Truck, RefreshCw, X } from "lucide-react";
 import { STATUSES } from "./admin.orders.index";
+import { SourceBadge } from "@/components/admin/SourceBadge";
+import { computeCodAmount } from "@/lib/cod";
 
 export const Route = createFileRoute("/admin/orders/$id")({ component: OrderDetail });
 
@@ -21,6 +23,8 @@ function OrderDetail() {
   const [saving, setSaving] = useState(false);
   const [courierBusy, setCourierBusy] = useState(false);
   const [courierMsg, setCourierMsg] = useState<string | null>(null);
+  // null = হিসাব করা COD (total) যাবে; admin কিছু লিখলে সেটাই যাবে
+  const [codInput, setCodInput] = useState<string | null>(null);
   // ছবি বড় করে দেখার জন্য lightbox state
   const [zoom, setZoom] = useState<{ src: string; alt: string } | null>(null);
 
@@ -44,8 +48,18 @@ function OrderDetail() {
     setCourierBusy(true);
     setCourierMsg(null);
     try {
-      const res = await sendOrderToCourier({ data: { id } });
-      setCourierMsg(res.ok ? "Steadfast-এ পাঠানো হয়েছে।" : res.error);
+      const override = codInput !== null && codInput.trim() !== "" ? Number(codInput) : undefined;
+      if (override !== undefined && (!Number.isFinite(override) || override < 0)) {
+        setCourierMsg("COD-এর ঘরে সঠিক টাকার অঙ্ক লিখুন।");
+        return;
+      }
+      const res = await sendOrderToCourier({ data: { id, codAmount: override } });
+      setCourierMsg(
+        res.ok
+          ? `Steadfast-এ পাঠানো হয়েছে — COD ৳${res.codAmount}${res.warning ? ` (${res.warning})` : ""}`
+          : res.error,
+      );
+      if (res.ok) setCodInput(null);
       await qc.invalidateQueries({ queryKey: ["admin-order", id] });
     } catch (e: any) {
       setCourierMsg(String(e?.message ?? e));
@@ -179,6 +193,49 @@ function OrderDetail() {
             {order.note && <p className="mt-2 rounded bg-muted p-2 text-xs">📝 {order.note}</p>}
           </div>
 
+          <div className="space-y-2 rounded-lg border bg-card p-4 text-sm">
+            <h2 className="font-semibold">অর্ডার কোথা থেকে এসেছে</h2>
+            <SourceBadge source={order.source} medium={order.source_medium} />
+            {order.attribution ? (
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                {(
+                  [
+                    ["Campaign", order.attribution.utm_campaign],
+                    ["Ad / Content", order.attribution.utm_content],
+                    ["utm_source", order.attribution.utm_source],
+                    ["utm_medium", order.attribution.utm_medium],
+                    ["TikTok click", order.attribution.ttclid && "✓ ttclid"],
+                    ["Facebook click", order.attribution.fbclid && "✓ fbclid"],
+                    ["Google click", order.attribution.gclid && "✓ gclid"],
+                    ["Referrer", order.attribution.referrer],
+                    ["Landing page", order.attribution.landing_page],
+                    ["চেনা গেছে", order.attribution.detected_by],
+                  ] as [string, string | undefined][]
+                )
+                  .filter(([, v]) => v)
+                  .map(([k, v]) => (
+                    <div key={k} className="contents">
+                      <dt className="text-muted-foreground">{k}</dt>
+                      <dd className="break-all">{v}</dd>
+                    </div>
+                  ))}
+              </dl>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                এই অর্ডারটি সোর্স ট্র্যাকিং চালুর আগের — সোর্স জানা নেই।
+              </p>
+            )}
+            {order.server_events && (
+              <p className="text-[11px] text-muted-foreground">
+                Server event:{" "}
+                {Object.entries(order.server_events)
+                  .filter(([k]) => k !== "at")
+                  .map(([k, v]) => `${k} ${String(v).startsWith("ok") ? "✓" : "✗"}`)
+                  .join(" · ")}
+              </p>
+            )}
+          </div>
+
           <div className="space-y-3 rounded-lg border bg-card p-4 text-sm">
             <h2 className="font-semibold">Courier — Steadfast</h2>
             {order.courier_consignment_id ? (
@@ -206,15 +263,46 @@ function OrderDetail() {
                 </button>
               </div>
             ) : (
-              <button
-                onClick={sendToCourier}
-                disabled={courierBusy}
-                className="flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
-              >
-                <Truck className="h-4 w-4" /> Send to Steadfast
-              </button>
+              <div className="space-y-2">
+                <label className="block text-xs text-muted-foreground">
+                  COD (কাস্টমারের কাছ থেকে কুরিয়ার যা নেবে)
+                </label>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">৳</span>
+                  <input
+                    type="number"
+                    min={0}
+                    inputMode="numeric"
+                    value={codInput ?? String(computeCodAmount(order))}
+                    onChange={(e) => setCodInput(e.target.value)}
+                    className="w-32 rounded-md border px-2 py-1.5 text-sm"
+                  />
+                  {codInput !== null && (
+                    <button
+                      type="button"
+                      onClick={() => setCodInput(null)}
+                      className="text-xs underline text-muted-foreground"
+                    >
+                      Total-এ ফেরত
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  পণ্য {formatBDT(Number(order.subtotal))}
+                  {Number(order.discount) > 0 &&
+                    ` − ডিসকাউন্ট ${formatBDT(Number(order.discount))}`}{" "}
+                  + ডেলিভারি {formatBDT(Number(order.shipping))} = {formatBDT(Number(order.total))}
+                </p>
+                <button
+                  onClick={sendToCourier}
+                  disabled={courierBusy}
+                  className="flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+                >
+                  <Truck className="h-4 w-4" /> Send to Steadfast
+                </button>
+              </div>
             )}
-            {order.courier_error && !order.courier_consignment_id && (
+            {order.courier_error && (
               <p className="rounded bg-destructive/10 p-2 text-xs text-destructive">
                 {order.courier_error}
               </p>

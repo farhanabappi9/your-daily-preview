@@ -9,6 +9,7 @@ import { useI18n } from "@/lib/i18n";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { trackPurchase } from "@/lib/pixel";
 import { ttCompletePayment } from "@/lib/tiktok-pixel";
+import { gtmPurchase } from "@/lib/gtm";
 import { useEffect, useRef } from "react";
 
 type SavedOrder = {
@@ -17,8 +18,38 @@ type SavedOrder = {
   total: number;
   subtotal?: number;
   shipping: number;
-  items: { id: string; name: string; sizeText: string; price: number; quantity: number }[];
+  discount: number;
+  createdAt?: string;
+  items: {
+    id: string;
+    productId: string;
+    name: string;
+    sizeText: string;
+    price: number;
+    quantity: number;
+  }[];
 };
+
+/** একই ডিভাইসে একটা অর্ডারের purchase event কখনো দুইবার যাবে না (refresh / back বাটন)। */
+const TRACKED_KEY = "af_tracked_orders_v1";
+function alreadyTracked(orderNo: string): boolean {
+  try {
+    const list = JSON.parse(localStorage.getItem(TRACKED_KEY) ?? "[]") as string[];
+    return list.includes(orderNo);
+  } catch {
+    return false;
+  }
+}
+function markTracked(orderNo: string) {
+  try {
+    const list = JSON.parse(localStorage.getItem(TRACKED_KEY) ?? "[]") as string[];
+    localStorage.setItem(TRACKED_KEY, JSON.stringify([...list.slice(-49), orderNo]));
+  } catch {
+    /* ignore */
+  }
+}
+/** পুরনো অর্ডারের লিংক পরে খুললে নতুন sale হিসেবে গোনা যাবে না। */
+const TRACK_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 /** Order items store sizes appended as "Product name (ছেলেদের: XL, মেয়েদের: M)". */
 function splitSizes(raw: string): { name: string; sizeText: string } {
@@ -62,8 +93,11 @@ function ThankYou() {
         total: Number(r.total),
         subtotal: Number(r.subtotal),
         shipping: Number(r.shipping),
+        discount: Number(r.discount ?? 0),
+        createdAt: r.created_at,
         items: (r.order_items ?? []).map((it: any) => ({
           id: it.id,
+          productId: String(it.product_id ?? it.id),
           name: splitSizes(it.name).name,
           sizeText: splitSizes(it.name).sizeText,
           price: Number(it.price),
@@ -74,25 +108,42 @@ function ThankYou() {
 
   const subtotal = data?.subtotal ?? 0;
 
-  // Purchase is reported from the confirmed receipt, not from the cart, so the
-  // value Meta sees always matches what the database actually recorded.
-  // The ref guards against a re-render firing a duplicate; the order number is
-  // also sent as the event ID so a page refresh is deduplicated server-side.
+  // Purchase রিপোর্ট হয় DB-তে সেভ হওয়া receipt থেকে (কার্ট থেকে নয়), তাই
+  // Facebook / TikTok / Google যা দেখে সেটা আসল অর্ডারের সাথে হুবহু মেলে।
+  // ডুপ্লিকেট-রোধ তিন স্তরে:
+  //   1. ref — re-render-এ দ্বিতীয়বার নয়
+  //   2. localStorage — refresh / back করলে একই ডিভাইসে আর নয়
+  //   3. event_id "purchase-<orderNo>" — server-side event-এর সাথে প্ল্যাটফর্ম নিজে মিলিয়ে নেয়
   const reportedOrder = useRef<string | null>(null);
   useEffect(() => {
     if (!data?.orderId || reportedOrder.current === data.orderId) return;
     reportedOrder.current = data.orderId;
-    trackPurchase({
+    if (alreadyTracked(data.orderId)) return;
+    const created = data.createdAt ? new Date(data.createdAt).getTime() : Date.now();
+    if (Date.now() - created > TRACK_WINDOW_MS) return;
+    markTracked(data.orderId);
+
+    const items = data.items.map((i) => ({
+      id: i.productId,
+      name: i.name,
+      quantity: i.quantity,
+      price: i.price,
+    }));
+    trackPurchase({ orderNo: data.orderId, value: data.total, items });
+    // TikTok-এ purchase = CompletePayment
+    ttCompletePayment({ orderNo: data.orderId, value: data.total, items });
+    gtmPurchase({
       orderNo: data.orderId,
       value: data.total,
-      items: data.items.map((i) => ({ name: i.name, quantity: i.quantity })),
-    });
-    // TikTok-এ purchase = CompletePayment; একই orderId event_id হিসেবে যায় তাই
-    // refresh করলে ডাবল sale count হয় না।
-    ttCompletePayment({
-      orderNo: data.orderId,
-      value: data.total,
-      items: data.items.map((i) => ({ name: i.name, quantity: i.quantity })),
+      shipping: data.shipping,
+      discount: data.discount,
+      phone: data.form.phone,
+      items: data.items.map((i) => ({
+        item_id: i.productId,
+        item_name: i.name,
+        price: i.price,
+        quantity: i.quantity,
+      })),
     });
   }, [data?.orderId, data?.total, data?.items]);
 
@@ -223,7 +274,6 @@ function ThankYou() {
               <Printer className="h-4 w-4" /> Invoice download
             </Link>
           )}
-
         </div>
       </main>
       <Footer />

@@ -18,11 +18,14 @@ import { ThemeCustomizer } from "../components/ThemeCustomizer";
 import { useProducts } from "../lib/products-store";
 import { useCart } from "../lib/cart";
 import {
-  META_PIXEL_ID,
+  initMetaPixel,
+  resolveMetaPixelId,
   trackInitiateCheckout,
   trackPageView,
   trackViewContent,
 } from "../lib/pixel";
+import { gtmBeginCheckout, gtmPageView, gtmViewItem, initGtm } from "../lib/gtm";
+import { captureAttribution } from "../lib/attribution";
 import {
   initTikTokPixel,
   ttInitiateCheckout,
@@ -130,38 +133,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   errorComponent: ErrorComponent,
 });
 
-/**
- * Meta Pixel base code, injected server-side so it is in the HTML from the
- * first byte. It only bootstraps `fbq` and fires the first PageView — every
- * later PageView comes from PixelRouteTracker below, because SPA navigation
- * never reloads the document.
- */
-const META_PIXEL_SNIPPET = `!function(f,b,e,v,n,t,s)
-{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
-n.callMethod.apply(n,arguments):n.queue.push(arguments)};
-if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
-n.queue=[];t=b.createElement(e);t.async=!0;
-t.src=v;s=b.getElementsByTagName(e)[0];
-s.parentNode.insertBefore(t,s)}(window, document,'script',
-'https://connect.facebook.net/en_US/fbevents.js');
-fbq('init', '${META_PIXEL_ID}');
-fbq('track', 'PageView');`;
-
 function RootShell({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <head>
         <HeadContent />
-        <script dangerouslySetInnerHTML={{ __html: META_PIXEL_SNIPPET }} />
-        <noscript>
-          <img
-            height="1"
-            width="1"
-            style={{ display: "none" }}
-            alt=""
-            src={`https://www.facebook.com/tr?id=${META_PIXEL_ID}&ev=PageView&noscript=1`}
-          />
-        </noscript>
       </head>
       <body>
         {children}
@@ -172,76 +148,110 @@ function RootShell({ children }: { children: ReactNode }) {
 }
 
 /**
- * Fires the events that can be derived purely from the URL:
- *   - PageView on every navigation
- *   - ViewContent on a product page
- *   - InitiateCheckout when the checkout screen opens
+ * URL থেকে বোঝা যায় এমন event:
+ *   - PageView / page_view — প্রতিটি SPA navigation-এ (প্রথমটা base code নিজেই পাঠায়)
+ *   - ViewContent / view_item — প্রোডাক্ট পেজে
+ *   - InitiateCheckout / begin_checkout — চেকআউট পেজ খুললে
  *
- * The first PageView is skipped because the base snippet already sent it.
- * AddToCart lives in the cart provider, Purchase in the thank-you route —
- * both need data the URL alone does not carry.
+ * আগের দুইটা বাগ ঠিক করা হয়েছে:
+ *   1. InitiateCheckout-এ `i.slug` পাঠানো হতো, কিন্তু cart item-এ slug থাকে
+ *      `i.product.slug`-এ — ফলে content_ids সবসময় খালি যেত।
+ *   2. সরাসরি /checkout বা /product/... লিংকে ঢুকলে (বিজ্ঞাপন থেকে যেমন হয়)
+ *      কার্ট/প্রোডাক্ট তখনো লোড হয়নি, তাই event কখনো fire-ই হতো না। এখন ডেটা
+ *      আসা পর্যন্ত অপেক্ষা করে, প্রতি পেজ-ভিজিটে একবারই পাঠায়।
  */
 function PixelRouteTracker() {
   const router = useRouter();
   const pathname = router.state.location.pathname;
   const firstRender = useRef(true);
+  const sentFor = useRef<{ view?: string; checkout?: string }>({});
   const { getBySlug } = useProducts();
   const { items, subtotal } = useCart();
 
+  // PageView — শুধু pathname বদলালে
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false;
-    } else {
-      trackPageView();
-      ttPageView();
-    }
-
-    const productMatch = pathname.match(/^\/product\/(.+)$/);
-    if (productMatch) {
-      const product = getBySlug(decodeURIComponent(productMatch[1]));
-      if (product) {
-        trackViewContent({ slug: product.slug, name: product.name, price: product.price });
-        ttViewContent({ slug: product.slug, name: product.name, price: product.price });
-      }
       return;
     }
+    trackPageView();
+    ttPageView();
+    gtmPageView(pathname);
+    sentFor.current = {};
+  }, [pathname]);
 
-    if (pathname === "/checkout" && items.length > 0) {
-      trackInitiateCheckout({
-        items: items.map((i) => ({ slug: i.slug, quantity: i.quantity })),
-        value: subtotal,
-      });
-      ttInitiateCheckout({
-        items: items.map((i) => ({ slug: i.slug, quantity: i.quantity })),
-        value: subtotal,
-      });
-    }
-    // `items`/`subtotal` are intentionally excluded: the checkout event should
-    // fire once when the page opens, not again on every cart tweak.
+  // ViewContent — প্রোডাক্ট ডেটা লোড হলে, প্রতি পেজে একবার
+  const productMatch = pathname.match(/^\/product\/(.+)$/);
+  const product = productMatch ? getBySlug(decodeURIComponent(productMatch[1])) : undefined;
+  useEffect(() => {
+    if (!product || sentFor.current.view === pathname) return;
+    sentFor.current.view = pathname;
+    const p = { slug: product.slug, name: product.name, price: product.price };
+    trackViewContent(p);
+    ttViewContent(p);
+    gtmViewItem(p);
+  }, [product, pathname]);
+
+  // InitiateCheckout — কার্ট hydrate হওয়ার পরে, প্রতি চেকআউট-ভিজিটে একবার
+  const onCheckout = pathname === "/checkout";
+  const hasItems = items.length > 0;
+  useEffect(() => {
+    if (!onCheckout || !hasItems || sentFor.current.checkout === pathname) return;
+    sentFor.current.checkout = pathname;
+    const list = items.map((i) => ({ slug: i.product.slug, quantity: i.quantity }));
+    trackInitiateCheckout({ items: list, value: subtotal });
+    ttInitiateCheckout({ items: list, value: subtotal });
+    gtmBeginCheckout({
+      value: subtotal,
+      items: items.map((i) => ({
+        item_id: i.product.slug,
+        item_name: i.product.name,
+        price: i.product.price,
+        quantity: i.quantity,
+      })),
+    });
+    // items/subtotal ইচ্ছা করে বাদ — কার্টে প্রতিবার পরিবর্তনে আবার fire হবে না
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathname, getBySlug]);
+  }, [onCheckout, hasItems, pathname]);
 
   return null;
 }
 
 /**
- * TikTok Pixel loader.
+ * Pixel / Tag loader — সব ID admin প্যানেল থেকে আসে (`settings` টেবিল):
+ *   - Facebook Pixel  (Admin → Facebook Pixel)
+ *   - TikTok Pixel    (Admin → TikTok Pixel)
+ *   - Google Tag Manager (Admin → Google Tag Manager)
+ * ID খালি বা বন্ধ থাকলে সেই প্ল্যাটফর্মের কোনো script-ই লোড হয় না।
  *
- * Pixel ID কোডে নেই — Admin → TikTok Pixel পেজে সেভ করা ID `settings` টেবিল
- * থেকে storefront query-র সাথে আসে। ID খালি বা toggle off থাকলে TikTok-এর
- * কোনো script-ই লোড হয় না।
+ * সাথে প্রথম পেজ লোডেই ভিজিটর কোথা থেকে এসেছে (utm / ttclid / fbclid / gclid /
+ * referrer) সেভ করা হয় — অর্ডারের "Source" কলাম এখান থেকেই আসে।
  */
-function TikTokPixelLoader() {
+function TrackingLoader() {
   const { data } = useQuery({ queryKey: ["storefront"], queryFn: () => getStorefront() });
-  const pixelId = (data?.settings as { tiktokPixelId?: string } | undefined)?.tiktokPixelId;
-  const enabled = (data?.settings as { tiktokPixelEnabled?: boolean } | undefined)
-    ?.tiktokPixelEnabled;
+  const settings = data?.settings as
+    | {
+        tiktokPixelId?: string;
+        tiktokPixelEnabled?: boolean;
+        metaPixelId?: string;
+        metaPixelEnabled?: boolean;
+        gtmId?: string;
+        gtmEnabled?: boolean;
+        gtmServerUrl?: string;
+      }
+    | undefined;
 
   useEffect(() => {
-    if (!data?.settings) return;
-    if (enabled === false) return;
-    initTikTokPixel(pixelId);
-  }, [data?.settings, pixelId, enabled]);
+    captureAttribution();
+  }, []);
+
+  useEffect(() => {
+    if (!settings) return;
+    const metaId = resolveMetaPixelId(settings);
+    if (metaId) initMetaPixel(metaId);
+    if (settings.tiktokPixelEnabled !== false) initTikTokPixel(settings.tiktokPixelId);
+    if (settings.gtmEnabled !== false) initGtm(settings.gtmId, settings.gtmServerUrl);
+  }, [settings]);
 
   return null;
 }
@@ -257,7 +267,7 @@ function RootComponent() {
             <Outlet />
             <ThemeCustomizer />
             <PixelRouteTracker />
-            <TikTokPixelLoader />
+            <TrackingLoader />
           </I18nProvider>
         </CartProvider>
       </ProductsProvider>

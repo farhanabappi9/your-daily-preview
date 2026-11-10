@@ -49,9 +49,7 @@ export const amIAdmin = createServerFn({ method: "GET" })
 export const getAccountStatusFn = createServerFn({ method: "POST" })
   .inputValidator((d: { email: string }) => z.object({ email: z.string().email() }).parse(d))
   .handler(async ({ data }) => {
-    const { publicServerClient, isSetupMissing } = await import(
-      "@/lib/admin-authorization.server"
-    );
+    const { publicServerClient, isSetupMissing } = await import("@/lib/admin-authorization.server");
     const { PRIMARY_ADMIN_EMAIL } = await import("@/lib/super-admin-sql");
     const isPrimary = data.email.trim().toLowerCase() === PRIMARY_ADMIN_EMAIL;
     const base = {
@@ -64,9 +62,7 @@ export const getAccountStatusFn = createServerFn({ method: "POST" })
     };
     if (!isPrimary) return base;
 
-    const { data: status, error } = await (publicServerClient() as any).rpc(
-      "primary_admin_status",
-    );
+    const { data: status, error } = await (publicServerClient() as any).rpc("primary_admin_status");
     if (error) {
       console.error("[admin-auth] primary_admin_status failed:", error.message);
       return { ...base, setupMissing: isSetupMissing(error.message) };
@@ -76,9 +72,8 @@ export const getAccountStatusFn = createServerFn({ method: "POST" })
 
 /** Public recovery: confirms + re-grants admin for the hard-coded owner email. */
 export const repairPrimaryAdmin = createServerFn({ method: "POST" }).handler(async () => {
-  const { publicServerClient, isSetupMissing, SETUP_MISSING_HINT } = await import(
-    "@/lib/admin-authorization.server"
-  );
+  const { publicServerClient, isSetupMissing, SETUP_MISSING_HINT } =
+    await import("@/lib/admin-authorization.server");
   const { data, error } = await (publicServerClient() as any).rpc("ensure_primary_admin");
   if (error) {
     console.error("[admin-auth] repair failed:", error.message);
@@ -147,9 +142,7 @@ export const listUsersAndRoles = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const sb = context.supabase as any;
-    const { isSetupMissing, SETUP_MISSING_HINT } = await import(
-      "@/lib/admin-authorization.server"
-    );
+    const { isSetupMissing, SETUP_MISSING_HINT } = await import("@/lib/admin-authorization.server");
     const { data: superFlag } = await sb.rpc("is_super_admin", { _user_id: context.userId });
     const { data, error } = await sb.rpc("admin_list_users");
     if (error) {
@@ -188,8 +181,6 @@ export const setUserRole = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     return result as { email: string; assignment: string };
   });
-
-
 
 export const getDashboard = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
@@ -520,15 +511,63 @@ export const deleteBanner = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+/**
+ * Pixel / tracking সেটিং — শুধু Facebook Pixel, TikTok Pixel আর Google Tag Manager
+ * পেজ থেকে (scope: "tracking") বদলানো যায়।
+ */
+export const TRACKING_SETTING_KEYS = [
+  "tiktokPixelId",
+  "tiktokPixelEnabled",
+  "metaPixelId",
+  "metaPixelEnabled",
+  "gtmId",
+  "gtmEnabled",
+  "gtmServerUrl",
+  "ga4MeasurementId",
+] as const;
+
 export const saveSettings = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { value: Record<string, unknown> }) =>
-    z.object({ value: z.record(z.string(), z.any()) }).parse(d),
+  .inputValidator((d: { value: Record<string, unknown>; scope?: "tracking" }) =>
+    z
+      .object({
+        value: z.record(z.string(), z.any()),
+        scope: z.enum(["tracking"]).optional(),
+      })
+      .parse(d),
   )
   .handler(async ({ data, context }) => {
-    const { error } = await (context.supabase as any)
+    const db = context.supabase as any;
+    // আগে পুরো blob সরাসরি overwrite হতো। Settings / Content পেজ অনেকক্ষণ খোলা
+    // রেখে সেভ করলে তাদের পুরনো কপির TikTok Pixel ID দিয়ে নতুনটা মুছে যেত।
+    // এখন DB-র বর্তমান মানের উপর merge হয়, আর pixel/tracking key শুধু
+    // tracking পেজ থেকেই বদলায়।
+    const { data: current, error: readError } = await db
       .from("settings")
-      .upsert({ key: "shop", value: data.value }, { onConflict: "key" });
+      .select("value")
+      .eq("key", "shop")
+      .maybeSingle();
+    if (readError) throw new Error(readError.message);
+
+    const tracking = new Set<string>(TRACKING_SETTING_KEYS);
+    const incoming: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(data.value)) {
+      const isTrackingKey = tracking.has(k);
+      if (data.scope === "tracking" ? isTrackingKey : !isTrackingKey) incoming[k] = v;
+    }
+
+    const merged: Record<string, unknown> = {
+      ...((current?.value ?? {}) as Record<string, unknown>),
+      ...incoming,
+    };
+    // গোপন key কখনো public `settings`-এ রাখা যাবে না (সবাই পড়তে পারে)
+    for (const k of Object.keys(merged)) {
+      if (/token|secret|api_?key|password/i.test(k)) delete merged[k];
+    }
+
+    const { error } = await db
+      .from("settings")
+      .upsert({ key: "shop", value: merged }, { onConflict: "key" });
     if (error) throw new Error(error.message);
     return { ok: true };
   });
