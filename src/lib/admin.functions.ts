@@ -207,13 +207,24 @@ export const listOrders = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const db = context.supabase as any;
-    const { data, error } = await db
-      .from("orders")
-      .select("*, order_items(*)")
-      .order("created_at", { ascending: false })
-      .limit(1000);
-    if (error) throw new Error(error.message);
-    return data ?? [];
+    // Supabase একবারে সর্বোচ্চ ১০০০ সারি দেয় — আগে তাই "সব · 1000" দেখাত আর
+    // পুরনো অর্ডার, রিপোর্ট আর কাস্টমার হিসাব বাদ পড়ে যেত। এখন পাতায় পাতায় সব আনে।
+    const PAGE = 1000;
+    const MAX = 50000;
+    const all: any[] = [];
+    for (let from = 0; from < MAX; from += PAGE) {
+      const { data, error } = await db
+        .from("orders")
+        .select("*, order_items(*)")
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(from, from + PAGE - 1);
+      if (error) throw new Error(error.message);
+      const page = data ?? [];
+      all.push(...page);
+      if (page.length < PAGE) break;
+    }
+    return all;
   });
 
 export const getOrder = createServerFn({ method: "GET" })
