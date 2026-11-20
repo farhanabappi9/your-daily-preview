@@ -55,7 +55,7 @@ export function ProductsProvider({ children }: { children: ReactNode }) {
   const { data, isLoading } = useQuery({
     queryKey: ["storefront"],
     queryFn: () => getStorefront(),
-    staleTime: 30_000,
+    staleTime: 5_000,
   });
 
   const value = useMemo<Ctx>(() => {

@@ -1,9 +1,9 @@
-import { categoryImage } from "@/lib/category-images";
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { ProductCard } from "@/components/ProductCard";
-import { categories } from "@/lib/products";
+import { toCategoryView } from "@/lib/category-view";
+import { getStorefront } from "@/lib/shop.functions";
 import { useProducts } from "@/lib/products-store";
 import { SmartImage } from "@/components/SmartImage";
 import { sortProducts, sortOptions, type SortKey } from "@/lib/sort";
@@ -12,11 +12,20 @@ import { useMemo, useState } from "react";
 import { Search, X } from "lucide-react";
 
 export const Route = createFileRoute("/category/$slug")({
-  head: ({ params }) => {
-    const cat = categories.find((c) => c.slug === params?.slug);
+  loader: async ({ params }) => {
+    try {
+      const store = await getStorefront();
+      const row = (store.categories ?? []).find((c) => c.slug === params.slug);
+      return { cat: row ? toCategoryView(row) : null };
+    } catch {
+      return { cat: null };
+    }
+  },
+  head: ({ params, loaderData }) => {
+    const cat = loaderData?.cat ?? null;
     const title = cat ? `${cat.nameEn} (${cat.name}) — Ahsan Fashion` : "Category — Ahsan Fashion";
-    const desc = cat?.descriptionEn ?? `Browse products in ${params?.slug} at Ahsan Fashion.`;
-    const image = cat?.image;
+    const desc = cat?.descriptionEn || `Browse products in ${params?.slug} at Ahsan Fashion.`;
+    const image = cat && !cat.image.startsWith("data:") ? cat.image : undefined;
     return {
       meta: [
         { title },
@@ -51,10 +60,12 @@ export const Route = createFileRoute("/category/$slug")({
 
 function Category() {
   const { slug } = Route.useParams();
-  const cat = categories.find((c) => c.slug === slug);
-  if (!cat) throw notFound();
-  const { products } = useProducts();
+  const { products, categories, loading } = useProducts();
   const { lang } = useI18n();
+  const cat = useMemo(() => {
+    const row = categories.find((c) => c.slug === slug);
+    return row ? toCategoryView(row) : null;
+  }, [categories, slug]);
   const all = useMemo(() => products.filter((p) => p.categorySlug === slug), [products, slug]);
 
   const [q, setQ] = useState("");
@@ -80,6 +91,21 @@ function Category() {
 
   const hasFilters = q !== "" || maxPrice !== null;
 
+  // ডেটা এখনো লোড হচ্ছে — "not found" না দেখিয়ে স্কেলিটন দেখান
+  if (!cat && loading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="mx-auto max-w-7xl px-3 py-5 sm:px-4 sm:py-8">
+          <div className="aspect-[16/9] w-full animate-pulse rounded-2xl bg-muted sm:aspect-[16/5]" />
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+  // ক্যাটাগরি নেই / Inactive / ডিলিট হয়ে গেছে
+  if (!cat) throw notFound();
+
   return (
     <div className="min-h-screen bg-background">
       <Header />
@@ -87,8 +113,8 @@ function Category() {
         <section className="mb-6 overflow-hidden rounded-2xl border shadow-elegant sm:mb-8 sm:rounded-3xl">
           <div className="relative aspect-[16/9] w-full sm:aspect-[16/7] lg:aspect-[16/5]">
             <SmartImage
-              src={categoryImage(cat.slug, cat.image).src}
-              srcSet={categoryImage(cat.slug, cat.image).srcSet || undefined}
+              src={cat.image}
+              srcSet={cat.srcSet || undefined}
               alt={cat.name}
               priority
               width={900}
@@ -104,9 +130,11 @@ function Category() {
               <h1 className="font-display text-2xl font-bold leading-tight drop-shadow sm:text-3xl md:text-5xl">
                 {cat.name}
               </h1>
-              <p className="line-clamp-2 max-w-2xl text-xs opacity-95 sm:line-clamp-none sm:text-sm md:text-base">
-                {cat.description}
-              </p>
+              {(lang === "bn" ? cat.description : cat.descriptionEn || cat.description) && (
+                <p className="line-clamp-2 max-w-2xl text-xs opacity-95 sm:line-clamp-none sm:text-sm md:text-base">
+                  {lang === "bn" ? cat.description : cat.descriptionEn || cat.description}
+                </p>
+              )}
               <div className="num text-[11px] opacity-90 sm:text-xs">{all.length} products</div>
             </div>
           </div>

@@ -61,7 +61,7 @@ function ProductPageSkeleton() {
   return (
     <div className="min-h-screen">
       <Header />
-      <div className="mx-auto grid max-w-6xl gap-8 p-6 md:grid-cols-2">
+      <div className="mx-auto grid max-w-6xl grid-cols-1 gap-6 p-3 sm:gap-8 sm:p-6 md:grid-cols-2">
         <div className="aspect-square animate-pulse rounded-xl bg-muted" />
         <div className="space-y-4">
           <div className="h-8 w-3/4 animate-pulse rounded bg-muted" />
@@ -128,9 +128,9 @@ function ProductDetail({ p }: { p: Product }) {
   return (
     <div className="min-h-screen bg-background">
       <Header />
-      <main className="mx-auto max-w-7xl px-3 py-5 pb-28 sm:px-4 sm:py-8 lg:pb-8">
+      <main className="mx-auto w-full max-w-7xl overflow-x-clip px-3 py-5 pb-28 sm:px-4 sm:py-8 lg:pb-8">
         {/* Breadcrumb */}
-        <nav className="mb-5 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+        <nav className="mb-4 flex min-w-0 flex-wrap items-center gap-1 text-xs text-muted-foreground sm:mb-5">
           <Link to="/" className="hover:text-primary">
             {t("nav.home")}
           </Link>
@@ -147,13 +147,13 @@ function ProductDetail({ p }: { p: Product }) {
             {p.category}
           </Link>
           <ChevronRight className="h-3 w-3" />
-          <span className="line-clamp-1 text-foreground">{p.name}</span>
+          <span className="line-clamp-1 min-w-0 max-w-full text-foreground">{p.name}</span>
         </nav>
 
-        <div className="grid gap-8 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-6 sm:gap-8 lg:grid-cols-2">
           {/* Gallery */}
-          <div className="lg:sticky lg:top-28 lg:self-start">
-            <div className="group relative overflow-hidden rounded-3xl border border-border/60 bg-muted shadow-card">
+          <div className="min-w-0 lg:sticky lg:top-28 lg:self-start">
+            <div className="group relative w-full overflow-hidden rounded-2xl sm:rounded-3xl border border-border/60 bg-muted shadow-card">
               <img
                 src={gallery[activeImg] ?? p.image}
                 srcSet={buildSrcSet(gallery[activeImg] ?? p.image, 900)}
@@ -163,15 +163,15 @@ function ProductDetail({ p }: { p: Product }) {
                 fetchPriority="high"
                 width={900}
                 height={1125}
-                className="h-auto w-full object-cover transition-transform duration-700 group-hover:scale-[1.04]"
+                className="block aspect-[4/5] h-auto w-full max-w-full object-cover transition-transform duration-700 group-hover:scale-[1.04]"
               />
-              <span className="num absolute left-4 top-4 rounded-full bg-gradient-primary px-3 py-1.5 text-sm text-primary-foreground shadow-elegant">
+              <span className="num absolute left-3 top-3 rounded-full bg-gradient-primary px-2.5 py-1 text-xs sm:left-4 sm:top-4 sm:px-3 sm:py-1.5 sm:text-sm text-primary-foreground shadow-elegant">
                 -{formatNumber(discount, lang)}%
               </span>
               <button
                 onClick={handleShare}
                 aria-label={t("product.share")}
-                className="glass-panel absolute right-4 top-4 rounded-full border border-border/60 p-2.5 shadow-card transition hover:text-primary"
+                className="glass-panel absolute right-3 top-3 rounded-full sm:right-4 sm:top-4 border border-border/60 p-2.5 shadow-card transition hover:text-primary"
               >
                 {copied ? (
                   <Check className="h-4 w-4 text-primary" />
@@ -181,13 +181,13 @@ function ProductDetail({ p }: { p: Product }) {
               </button>
             </div>
             {gallery.length > 1 && (
-              <div className="mt-3 flex gap-3 overflow-x-auto pb-1">
+              <div className="no-scrollbar snap-strip mt-3 flex w-full min-w-0 max-w-full gap-2 overflow-x-auto pb-1 sm:gap-3">
                 {gallery.map((src, i) => (
                   <button
                     key={src}
                     onClick={() => setActiveImg(i)}
                     aria-label={`Image ${i + 1}`}
-                    className={`h-24 w-20 shrink-0 overflow-hidden rounded-xl border-2 transition ${
+                    className={`h-20 w-16 shrink-0 overflow-hidden rounded-xl sm:h-24 sm:w-20 border-2 transition ${
                       activeImg === i
                         ? "border-primary shadow-elegant"
                         : "border-border/60 hover:border-primary/40"
@@ -208,7 +208,7 @@ function ProductDetail({ p }: { p: Product }) {
                 ))}
               </div>
             )}
-            <div className="mt-3 grid grid-cols-3 gap-3">
+            <div className="mt-3 grid grid-cols-3 gap-2 sm:gap-3">
               {[
                 { icon: Truck, label: t("product.ship") },
                 { icon: Shield, label: t("product.cod") },
@@ -216,27 +216,27 @@ function ProductDetail({ p }: { p: Product }) {
               ].map(({ icon: Icon, label }) => (
                 <div
                   key={label}
-                  className="rounded-2xl border border-border/60 bg-card p-3 text-center shadow-card"
+                  className="min-w-0 rounded-xl border border-border/60 bg-card p-2 text-center shadow-card sm:rounded-2xl sm:p-3"
                 >
                   <Icon className="mx-auto mb-1.5 h-4 w-4 text-primary" />
-                  <p className="text-[11px] leading-snug text-muted-foreground">{label}</p>
+                  <p className="break-words text-[10px] leading-snug text-muted-foreground sm:text-[11px]">{label}</p>
                 </div>
               ))}
             </div>
           </div>
 
           {/* Details */}
-          <div>
+          <div className="min-w-0">
             <span className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">
               {p.category}
             </span>
-            <h1 className="mt-2 font-display text-2xl font-bold leading-tight sm:text-3xl md:text-4xl">
+            <h1 className="mt-2 font-display text-xl font-bold leading-tight break-words sm:text-3xl md:text-4xl">
               {p.name}
             </h1>
 
             <div className="mt-4 rounded-2xl border border-border/60 bg-card p-4 shadow-card">
               <div className="flex flex-wrap items-end gap-x-3 gap-y-1">
-                <span className="num text-4xl text-primary">{formatMoney(p.price, lang)}</span>
+                <span className="num text-3xl text-primary sm:text-4xl">{formatMoney(p.price, lang)}</span>
                 <span className="num text-lg font-medium text-muted-foreground line-through">
                   {formatMoney(p.oldPrice, lang)}
                 </span>
@@ -277,7 +277,7 @@ function ProductDetail({ p }: { p: Product }) {
             )}
 
             {/* Quantity + total */}
-            <div className="mt-5 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-2xl border border-border/60 bg-muted/40 p-4">
+            <div className="mt-5 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-border/60 bg-muted/40 p-3 sm:gap-4 sm:p-4">
               <div className="flex min-w-0 items-center gap-3">
                 <span className="shrink-0 text-sm font-semibold">{t("product.qty")}</span>
                 <div className="flex shrink-0 items-center rounded-xl border bg-background">
@@ -288,7 +288,7 @@ function ProductDetail({ p }: { p: Product }) {
                   >
                     <Minus className="h-4 w-4" />
                   </button>
-                  <span className="num w-12 text-center text-lg">{formatNumber(qty, lang)}</span>
+                  <span className="num w-10 text-center text-lg sm:w-12">{formatNumber(qty, lang)}</span>
                   <button
                     aria-label="+"
                     onClick={() => setQty((q) => Math.min(99, q + 1))}
@@ -302,12 +302,12 @@ function ProductDetail({ p }: { p: Product }) {
                 <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
                   {t("product.total")}
                 </div>
-                <div className="num text-2xl text-primary">{formatMoney(p.price * qty, lang)}</div>
+                <div className="num text-xl text-primary sm:text-2xl">{formatMoney(p.price * qty, lang)}</div>
               </div>
             </div>
 
             {/* Actions */}
-            <div className="mt-5 flex flex-wrap gap-3">
+            <div className="mt-5 hidden flex-wrap gap-3 lg:flex">
               <button
                 onClick={handleAdd}
                 className="flex flex-1 items-center justify-center gap-2 rounded-full border-2 border-primary bg-background px-6 py-3.5 text-sm font-semibold text-primary transition hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
@@ -328,7 +328,7 @@ function ProductDetail({ p }: { p: Product }) {
 
             {/* Tabs */}
             <div className="mt-8 overflow-hidden rounded-2xl border border-border/60 bg-card shadow-card">
-              <div className="flex border-b">
+              <div className="no-scrollbar flex overflow-x-auto border-b">
                 {(
                   [
                     ["desc", t("product.desc")],
@@ -339,7 +339,7 @@ function ProductDetail({ p }: { p: Product }) {
                   <button
                     key={k}
                     onClick={() => setTab(k)}
-                    className={`flex-1 px-3 py-3 text-xs font-semibold transition sm:text-sm ${
+                    className={`flex-1 whitespace-nowrap px-3 py-3 text-xs font-semibold transition sm:text-sm ${
                       tab === k
                         ? "border-b-2 border-primary text-primary"
                         : "text-muted-foreground hover:text-foreground"
@@ -349,7 +349,7 @@ function ProductDetail({ p }: { p: Product }) {
                   </button>
                 ))}
               </div>
-              <div className="p-5 text-sm leading-relaxed text-muted-foreground">
+              <div className="min-w-0 break-words p-4 text-sm leading-relaxed sm:p-5 text-muted-foreground">
                 {tab === "desc" && <ProductDescription text={p.description} />}
                 {tab === "specs" && (
                   <dl className="divide-y">
@@ -366,8 +366,8 @@ function ProductDetail({ p }: { p: Product }) {
                       ),
                     ].map(([k, v]) => (
                       <div key={k} className="flex justify-between gap-4 py-2.5">
-                        <dt>{k}</dt>
-                        <dd className="text-right font-medium text-foreground">{v}</dd>
+                        <dt className="shrink-0">{k}</dt>
+                        <dd className="min-w-0 break-words text-right font-medium text-foreground">{v}</dd>
                       </div>
                     ))}
                   </dl>
@@ -390,7 +390,7 @@ function ProductDetail({ p }: { p: Product }) {
 
         {related.length > 0 && (
           <section className="mt-12 sm:mt-16">
-            <h2 className="mb-5 font-display text-2xl font-bold sm:mb-6 sm:text-3xl">
+            <h2 className="mb-4 font-display text-xl font-bold sm:mb-6 sm:text-3xl">
               {t("product.related")}
             </h2>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4">
@@ -404,12 +404,12 @@ function ProductDetail({ p }: { p: Product }) {
 
       {/* Mobile sticky buy bar */}
       <div className="safe-bottom fixed inset-x-0 bottom-0 z-30 border-t border-border/60 bg-card/95 px-3 pt-3 shadow-elegant backdrop-blur lg:hidden">
-        <div className="flex items-center gap-2.5">
+        <div className="mx-auto flex max-w-xl items-center gap-2.5">
           <div className="min-w-0 shrink-0">
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
               {t("product.total")}
             </div>
-            <div className="num text-lg text-primary">{formatMoney(p.price * qty, lang)}</div>
+            <div className="num whitespace-nowrap text-base text-primary sm:text-lg">{formatMoney(p.price * qty, lang)}</div>
           </div>
           <button
             onClick={handleAdd}

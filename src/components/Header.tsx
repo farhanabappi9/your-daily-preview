@@ -18,7 +18,6 @@ import {
 import { useCart } from "@/lib/cart";
 import { useEffect, useState } from "react";
 import logoAsset from "@/assets/af-logo.jpeg.asset.json";
-import { categories } from "@/lib/products";
 import { useI18n } from "@/lib/i18n";
 import { CONTACT } from "@/lib/contact";
 import { LangToggle } from "./LangToggle";
@@ -33,7 +32,7 @@ export function Header() {
   const [q, setQ] = useState("");
   const { t, lang } = useI18n();
   const router = useRouter();
-  const { settings } = useProducts();
+  const { settings, categories } = useProducts();
   const content = contentSettings(settings);
 
   // Lock body scroll while the mobile drawer is open
@@ -231,7 +230,7 @@ export function Header() {
               params={{ slug: c.slug }}
               className="flex min-h-10 shrink-0 items-center whitespace-nowrap rounded-full border border-border/70 px-3.5 py-2 text-xs font-medium transition active:border-primary active:text-primary"
             >
-              {lang === "bn" ? c.name : c.nameEn}
+              {lang === "bn" ? c.name : c.name_en || c.name}
             </Link>
           ))}
         </div>
@@ -304,7 +303,7 @@ export function Header() {
                       onClick={() => setDrawer(false)}
                       className="rounded-lg px-2 py-2.5 text-sm text-muted-foreground transition active:bg-primary/10 active:text-primary"
                     >
-                      {lang === "bn" ? c.name : c.nameEn}
+                      {lang === "bn" ? c.name : c.name_en || c.name}
                     </Link>
                   ))}
                 </div>

@@ -1,9 +1,8 @@
-import { categoryImage } from "@/lib/category-images";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { ProductCard } from "@/components/ProductCard";
-import { categories } from "@/lib/products";
+import { toCategoryView } from "@/lib/category-view";
 import { useProducts } from "@/lib/products-store";
 import { HeroCarousel } from "@/components/HeroCarousel";
 import { useI18n } from "@/lib/i18n";
@@ -11,7 +10,7 @@ import { Truck, ShieldCheck, RotateCcw, Headphones, ArrowUpDown } from "lucide-r
 import { SmartImage } from "@/components/SmartImage";
 import coverAsset from "@/assets/af-cover.jpeg.asset.json";
 import { sortProducts, sortOptions, type SortKey } from "@/lib/sort";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -31,7 +30,8 @@ export const Route = createFileRoute("/")({
 });
 
 function Index() {
-  const { products } = useProducts();
+  const { products, categories: dbCategories, loading } = useProducts();
+  const categories = useMemo(() => dbCategories.map(toCategoryView), [dbCategories]);
   const { t, lang } = useI18n();
   const [sort, setSort] = useState<SortKey>("popular");
   return (
@@ -76,6 +76,11 @@ function Index() {
             </h2>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-7">
+            {loading &&
+              categories.length === 0 &&
+              Array.from({ length: 7 }).map((_, i) => (
+                <div key={i} className="aspect-[3/4] animate-pulse rounded-2xl bg-muted" />
+              ))}
             {categories.map((c, i) => (
               <Link
                 key={c.slug}
@@ -86,8 +91,8 @@ function Index() {
               >
                 <div className="relative aspect-[3/4] overflow-hidden">
                   <SmartImage
-                    src={categoryImage(c.slug, c.image).src}
-                    srcSet={categoryImage(c.slug, c.image).srcSet || undefined}
+                    src={c.image}
+                    srcSet={c.srcSet || undefined}
                     alt={c.name}
                     priority={i < 4}
                     width={480}

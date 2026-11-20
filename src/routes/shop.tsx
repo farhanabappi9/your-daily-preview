@@ -2,7 +2,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { ProductCard } from "@/components/ProductCard";
-import { categories } from "@/lib/products";
 import { useProducts } from "@/lib/products-store";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { LayoutGrid, List, RotateCcw, Search, SlidersHorizontal } from "lucide-react";
@@ -35,7 +34,7 @@ export const Route = createFileRoute("/shop")({
 });
 
 function Shop() {
-  const { products } = useProducts();
+  const { products, categories } = useProducts();
   const { t, lang } = useI18n();
   const { q: initialQ } = Route.useSearch();
   const [q, setQ] = useState(initialQ ?? "");
@@ -168,7 +167,7 @@ function Shop() {
                       { slug: "all", name: t("shop.allCat") },
                       ...categories.map((c) => ({
                         slug: c.slug,
-                        name: lang === "bn" ? c.name : c.nameEn,
+                        name: lang === "bn" ? c.name : c.name_en || c.name,
                       })),
                     ].map((c) => (
                       <button

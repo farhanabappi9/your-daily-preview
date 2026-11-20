@@ -514,6 +514,53 @@
   }
 }
 
+/* ===== Mobile-fit safety net (applies to the whole site + admin) ===== */
+@layer base {
+  /* Grid/flex children may shrink below their content width — stops scroll strips,
+     long names and tables from pushing the page wider than the phone screen. */
+  .grid > *,
+  main,
+  section,
+  article {
+    min-width: 0;
+  }
+  img,
+  video {
+    height: auto;
+  }
+  /* Wide admin tables scroll sideways inside their box instead of squashing */
+  .overflow-x-auto {
+    max-width: 100%;
+    -webkit-overflow-scrolling: touch;
+  }
+  .overflow-x-auto > table {
+    min-width: 640px;
+  }
+  .overflow-x-auto > table th,
+  .overflow-x-auto > table td {
+    white-space: nowrap;
+  }
+  input,
+  select,
+  textarea {
+    max-width: 100%;
+    min-width: 0;
+  }
+  @media (max-width: 640px) {
+    /* Admin/dialog content never wider than the screen */
+    [role="dialog"] {
+      max-width: calc(100vw - 1.5rem);
+      max-height: calc(100dvh - 1.5rem);
+      overflow-y: auto;
+    }
+    pre,
+    code {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  }
+}
+
 @keyframes fade-in-up {
   from {
     opacity: 0;
